@@ -1,0 +1,55 @@
+@startuml
+skinparam shadowing false
+
+title Sequence Diagram - Optimistic Like/Upvote (single network action, planned US5)
+
+actor User
+participant FeedScreen <<View>>
+participant FeedViewModel <<Controller>>
+participant ForumRepository <<Service>>
+participant ApiService <<Service>>
+database BackendAPI as Backend
+
+User -> FeedScreen: tapUpvote(postId)
+FeedScreen -> FeedViewModel: onUpvoteClick(postId)
+activate FeedViewModel
+
+FeedViewModel -> FeedViewModel: optimisticUpdate(postId)\nscore +1, liked=true, pending=true
+
+FeedViewModel -> ForumRepository: vote(targetId=postId, targetType="POST", direction=1) <<Planned>>
+activate ForumRepository
+ForumRepository -> ApiService: vote(sessionId, VoteRequest) <<Planned>>
+activate ApiService
+ApiService -> Backend: POST /api/votes
+activate Backend
+
+alt Success (HTTP 200)
+  Backend --> ApiService: VoteResponse
+  deactivate Backend
+  ApiService --> ForumRepository: success
+  deactivate ApiService
+  ForumRepository --> FeedViewModel: success
+  deactivate ForumRepository
+
+  FeedViewModel -> FeedViewModel: pending=false\nkeep optimistic state
+  FeedViewModel --> FeedScreen: render(updated post score, liked=true)
+else Failure (HTTP 4xx/5xx or network)
+  Backend --> ApiService: error
+  deactivate Backend
+  ApiService --> ForumRepository: failure
+  deactivate ApiService
+  ForumRepository --> FeedViewModel: failure(error)
+  deactivate ForumRepository
+
+  FeedViewModel -> FeedViewModel: rollback(postId)\nscore -1, liked=false, pending=false
+  FeedViewModel --> FeedScreen: showError("Vote failed")
+end
+
+deactivate FeedViewModel
+
+note over FeedViewModel
+UI is updated before network returns.
+On error, state is reverted (optimistic rollback).
+end note
+
+@enduml

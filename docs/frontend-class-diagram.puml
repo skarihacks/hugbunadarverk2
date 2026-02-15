@@ -1,0 +1,181 @@
+@startuml
+skinparam packageStyle rectangle
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+
+left to right direction
+
+title Frontend Class Diagram - com.hbv501g.forumapp (Minimal MVVM + Repository)
+
+package "View Layer <<View>>" {
+  class MainActivity <<View>> {
+    +onCreate(savedInstanceState: Bundle?): Unit
+  }
+
+  class ForumApp <<View>>
+
+  class LoginScreen <<View>>
+  class SignUpScreen <<View>>
+  class FeedScreen <<View>>
+  class CreatePostScreen <<View>>
+  class CreateCommunityScreen <<View>>
+  class PostDetailScreen <<View>>
+  class PostCard <<View>>
+}
+
+package "Controller Layer (ViewModel) <<Controller>>" {
+  class LoginViewModel <<Controller>> {
+    +login(): Unit
+  }
+
+  class SignUpViewModel <<Controller>> {
+    +signUp(): Unit
+  }
+
+  class FeedViewModel <<Controller>> {
+    +refresh(): Unit
+    +updateSort(sort: FeedSort): Unit
+    +logout(): Unit
+  }
+
+  class CreatePostViewModel <<Controller>> {
+    +submit(): Unit
+  }
+
+  class CreateCommunityViewModel <<Controller>> {
+    +submit(): Unit
+  }
+
+  class PostDetailViewModel <<Controller>> {
+    +refresh(): Unit
+  }
+}
+
+package "Service + Data Access <<Service>>" {
+  class ForumRepository <<Service>> {
+    +register(username: String, email: String, password: String): Unit
+    +registerAndLogin(username: String, email: String, password: String): Unit
+    +login(identifier: String, password: String): Unit
+    +logout(): Unit
+    +getFeed(sort: FeedSort, page: Int, size: Int): Page<Post>
+    +getPost(postId: String): Post
+    +createTextPost(communityName: String, title: String, body: String): Post
+    +createCommunity(name: String, description: String?): String
+    +getComments(postId: String): List<Comment>
+    +createComment(postId: String, body: String): Comment
+  }
+
+  class ApiClient <<Service>> {
+    +createService(baseUrl: String): ApiService
+  }
+
+  interface ApiService <<Service>> {
+    +register(req: RegisterRequest): UserResponse
+    +login(req: LoginRequest): AuthSessionResponse
+    +logout(sessionId: String): Unit
+    +listFeed(scope: String, sort: String, page: Int, size: Int): JsonElement
+    +createPost(sessionId: String, req: CreatePostRequest): PostResponse
+    +createCommunity(sessionId: String, req: CreateCommunityRequest): CommunityResponse
+    +getPost(postId: String): PostResponse
+    +listComments(postId: String): List<CommentResponse>
+    +createComment(sessionId: String, req: CreateCommentRequest): CommentResponse
+  }
+
+  class SessionStore <<LocalStorage>> {
+    +sessionFlow: Flow<UserSession?>
+    +saveSession(session: UserSession): Unit
+    +currentSessionId(): String?
+    +clearSession(): Unit
+  }
+}
+
+package "Model Layer <<Model>>" {
+  class UserSession <<Model>> {
+    +sessionId: String
+    +userId: String
+    +username: String
+    +email: String
+  }
+
+  class Post <<Model>> {
+    +id: String
+    +community: String
+    +author: String
+    +title: String
+    +type: String
+    +body: String?
+    +url: String?
+    +mediaUrl: String?
+    +score: Int
+    +createdAt: String
+  }
+
+  class Comment <<Model>> {
+    +id: String
+    +postId: String
+    +author: String
+    +body: String
+    +score: Int
+    +createdAt: String
+  }
+
+  class Page~T~ <<Model>> {
+    +items: List<T>
+    +page: Int
+    +size: Int
+    +totalElements: Long
+    +totalPages: Int
+  }
+
+  enum FeedSort <<Model>> {
+    HOT
+    NEW
+    TOP
+  }
+}
+
+MainActivity --> SessionStore : creates
+MainActivity --> ApiClient : createService()
+MainActivity --> ForumRepository : creates
+MainActivity --> ForumApp : setContent
+
+ForumApp --> LoginScreen : unauthenticated
+ForumApp --> SignUpScreen : unauthenticated
+ForumApp --> FeedScreen : authenticated
+ForumApp --> CreatePostScreen : route
+ForumApp --> CreateCommunityScreen : route
+ForumApp --> PostDetailScreen : route
+
+LoginScreen --> LoginViewModel : uses
+SignUpScreen --> SignUpViewModel : uses
+FeedScreen --> FeedViewModel : uses
+CreatePostScreen --> CreatePostViewModel : uses
+CreateCommunityScreen --> CreateCommunityViewModel : uses
+PostDetailScreen --> PostDetailViewModel : uses
+
+FeedScreen --> PostCard : renders
+PostDetailScreen --> PostCard : renders
+
+LoginViewModel --> ForumRepository : calls
+SignUpViewModel --> ForumRepository : calls
+FeedViewModel --> ForumRepository : calls
+CreatePostViewModel --> ForumRepository : calls
+CreateCommunityViewModel --> ForumRepository : calls
+PostDetailViewModel --> ForumRepository : calls
+
+ForumRepository --> ApiService : network requests
+ForumRepository --> SessionStore : session persistence
+ApiClient ..> ApiService : creates
+
+Post "1" -- "0..*" Comment
+
+note bottom
+MVP scope shown:
+- Login / SignUp
+- Feed
+- Create Post
+- Create Community
+- Post Detail
+end note
+
+@enduml
