@@ -69,15 +69,14 @@ data class CommunityResponse(
 )
 
 data class CommentResponse(
-    val id: String,
-    val postId: String,
-    val author: String,
-    val body: String,
-    val score: Int,
-    val createdAt: String
+    val id: String?,
+    val postId: String?,
+    val author: String?,
+    val body: String?,
+    val score: Int?,
+    val createdAt: String?
 )
 
 data class CreateCommentRequest(
-    val postId: String,
     val body: String
 )

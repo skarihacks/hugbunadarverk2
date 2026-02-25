@@ -153,7 +153,8 @@ class ForumRepository(
         return try {
             apiService.createComment(
                 sessionId = sessionId,
-                request = CreateCommentRequest(postId = postId, body = body.trim())
+                postId = postId,
+                request = CreateCommentRequest(body = body.trim())
             ).toDomain()
         } catch (throwable: Throwable) {
             throw RepositoryException(throwable.toUserMessage())
@@ -320,13 +321,16 @@ class ForumRepository(
     }
 
     private fun CommentResponse.toDomain(): Comment {
+        val commentId = id?.takeIf { it.isNotBlank() } ?: throw RepositoryException("Comment response missing id")
+        val commentPostId = postId?.takeIf { it.isNotBlank() }
+            ?: throw RepositoryException("Comment response missing postId")
         return Comment(
-            id = id,
-            postId = postId,
-            author = author,
-            body = body,
-            score = score,
-            createdAt = createdAt
+            id = commentId,
+            postId = commentPostId,
+            author = author?.takeIf { it.isNotBlank() } ?: "unknown",
+            body = body?.takeIf { it.isNotBlank() } ?: "",
+            score = score ?: 0,
+            createdAt = createdAt ?: ""
         )
     }
 }

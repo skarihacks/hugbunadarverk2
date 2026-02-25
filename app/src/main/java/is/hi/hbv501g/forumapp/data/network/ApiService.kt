@@ -42,12 +42,13 @@ interface ApiService {
     @GET("api/posts/{id}")
     suspend fun getPost(@Path("id") postId: String): PostResponse
 
-    @GET("api/comments/post/{postId}")
+    @GET("api/posts/{postId}/comments")
     suspend fun listComments(@Path("postId") postId: String): List<CommentResponse>
 
-    @POST("api/comments")
+    @POST("api/posts/{postId}/comments")
     suspend fun createComment(
         @Header("X-Session-Id") sessionId: String,
+        @Path("postId") postId: String,
         @Body request: CreateCommentRequest
     ): CommentResponse
 }
