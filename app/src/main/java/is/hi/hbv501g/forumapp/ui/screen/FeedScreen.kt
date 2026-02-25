@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -48,6 +49,7 @@ data class FeedUiState(
     val username: String = "",
     val selectedSort: FeedSort = FeedSort.HOT,
     val posts: List<Post> = emptyList(),
+    val joinedCommunities: Set<String> = emptySet(),
     val isLoading: Boolean = true,
     val error: String? = null
 )
@@ -61,6 +63,11 @@ class FeedViewModel(private val repository: ForumRepository) : ViewModel() {
         viewModelScope.launch {
             repository.sessionFlow.collect { session ->
                 _uiState.update { it.copy(username = session?.username.orEmpty()) }
+            }
+        }
+        viewModelScope.launch {
+            repository.joinedCommunitiesFlow.collect { joined ->
+                _uiState.update { it.copy(joinedCommunities = joined) }
             }
         }
         refresh()
@@ -100,12 +107,14 @@ class FeedViewModel(private val repository: ForumRepository) : ViewModel() {
             }
         }
     }
+
 }
 
 @Composable
 fun FeedRoute(
     repository: ForumRepository,
     onOpenPost: (String) -> Unit,
+    onOpenCommunities: () -> Unit,
     onCreatePost: () -> Unit,
     onCreateCommunity: () -> Unit
 ) {
@@ -118,6 +127,7 @@ fun FeedRoute(
         state = state,
         onSelectSort = viewModel::updateSort,
         onRefresh = viewModel::refresh,
+        onOpenCommunities = onOpenCommunities,
         onLogout = viewModel::logout,
         onOpenPost = onOpenPost,
         onCreatePost = onCreatePost,
@@ -131,11 +141,19 @@ private fun FeedScreen(
     state: FeedUiState,
     onSelectSort: (FeedSort) -> Unit,
     onRefresh: () -> Unit,
+    onOpenCommunities: () -> Unit,
     onLogout: () -> Unit,
     onOpenPost: (String) -> Unit,
     onCreatePost: () -> Unit,
     onCreateCommunity: () -> Unit
 ) {
+    val joinedCommunitiesLower = state.joinedCommunities.map { it.lowercase() }.toSet()
+    val visiblePosts = if (joinedCommunitiesLower.isEmpty()) {
+        state.posts
+    } else {
+        state.posts.filter { post -> post.community.lowercase() in joinedCommunitiesLower }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -153,6 +171,9 @@ private fun FeedScreen(
                     }
                     IconButton(onClick = onCreateCommunity) {
                         Icon(Icons.Default.AddCircle, contentDescription = "Create community")
+                    }
+                    IconButton(onClick = onOpenCommunities) {
+                        Icon(Icons.Default.People, contentDescription = "Communities")
                     }
                     IconButton(onClick = onLogout) {
                         Icon(Icons.Default.ExitToApp, contentDescription = "Logout")
@@ -180,6 +201,15 @@ private fun FeedScreen(
                 )
             }
 
+            if (state.joinedCommunities.isNotEmpty()) {
+                Text(
+                    text = "Showing joined communities only (${state.joinedCommunities.size})",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                )
+            }
+
             if (state.isLoading && state.posts.isEmpty()) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
@@ -193,8 +223,11 @@ private fun FeedScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    items(items = state.posts, key = { it.id }) { post ->
-                        PostCard(post = post, onClick = { onOpenPost(post.id) })
+                    items(items = visiblePosts, key = { it.id }) { post ->
+                        PostCard(
+                            post = post,
+                            onClick = { onOpenPost(post.id) }
+                        )
                     }
                 }
             }

@@ -4,7 +4,7 @@
             "outputFile": "com.hbv501g.forumapp-mergeDebugResources-68:/values-v22/values-v22.xml",
             "map": [
                 {
-                    "source": "/Users/oskardav/.gradle/caches/9.0-milestone-1/transforms/358110b8d37232bbfbad0091a37dc9bb/transformed/appcompat-1.6.1/res/values-v22/values-v22.xml",
+                    "source": "/Users/saevarbrekisnorrason/.gradle/caches/9.0-milestone-1/transforms/358110b8d37232bbfbad0091a37dc9bb/transformed/appcompat-1.6.1/res/values-v22/values-v22.xml",
                     "from": {
                         "startLines": "2,3,4,9",
                         "startColumns": "4,4,4,4",

@@ -21,6 +21,10 @@ import com.hbv501g.forumapp.data.network.RegisterRequest
 import com.hbv501g.forumapp.data.session.SessionStore
 import java.io.IOException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import org.json.JSONObject
 import retrofit2.HttpException
 
@@ -31,8 +35,10 @@ class ForumRepository(
     private val gson = Gson()
     private val postListType = object : TypeToken<List<PostResponse>>() {}.type
     private val postPageType = object : TypeToken<PageResponse<PostResponse>>() {}.type
+    private val _joinedCommunities = MutableStateFlow<Set<String>>(emptySet())
 
     val sessionFlow: Flow<UserSession?> = sessionStore.sessionFlow
+    val joinedCommunitiesFlow: StateFlow<Set<String>> = _joinedCommunities.asStateFlow()
 
     suspend fun register(username: String, email: String, password: String) {
         try {
@@ -81,6 +87,7 @@ class ForumRepository(
             runCatching { apiService.logout(sessionId) }
         }
         sessionStore.clearSession()
+        _joinedCommunities.value = emptySet()
     }
 
     suspend fun getFeed(sort: FeedSort, page: Int = 0, size: Int = 25): Page<Post> {
@@ -151,6 +158,40 @@ class ForumRepository(
         } catch (throwable: Throwable) {
             throw RepositoryException(throwable.toUserMessage())
         }
+    }
+
+    suspend fun listCommunities(sort: FeedSort = FeedSort.HOT, size: Int = 100): List<String> {
+        val page = getFeed(sort = sort, page = 0, size = size)
+        return page.items
+            .map { it.community.trim() }
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase() }
+            .sortedBy { it.lowercase() }
+    }
+
+    fun setCommunityJoined(communityName: String, joined: Boolean) {
+        val normalized = communityName.trim()
+        if (normalized.isBlank()) {
+            return
+        }
+
+        _joinedCommunities.update { current ->
+            val existing = current.firstOrNull { it.equals(normalized, ignoreCase = true) }
+            if (joined) {
+                if (existing == null) current + normalized else current
+            } else {
+                if (existing == null) current else current - existing
+            }
+        }
+    }
+
+    fun toggleCommunityMembership(communityName: String) {
+        val normalized = communityName.trim()
+        if (normalized.isBlank()) {
+            return
+        }
+        val alreadyJoined = _joinedCommunities.value.any { it.equals(normalized, ignoreCase = true) }
+        setCommunityJoined(communityName = normalized, joined = !alreadyJoined)
     }
 
     private suspend fun requireSessionId(): String {
