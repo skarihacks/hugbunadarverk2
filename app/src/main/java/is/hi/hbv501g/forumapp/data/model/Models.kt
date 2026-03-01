@@ -22,6 +22,7 @@ data class Post(
     val body: String?,
     val url: String?,
     val mediaUrl: String?,
+    val mediaBase64: String?,
     val score: Int,
     val createdAt: String
 )

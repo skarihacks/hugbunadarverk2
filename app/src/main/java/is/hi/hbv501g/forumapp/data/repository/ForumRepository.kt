@@ -1,5 +1,6 @@
 package com.hbv501g.forumapp.data.repository
 
+import android.util.Base64
 import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
@@ -25,8 +26,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import retrofit2.HttpException
+import java.io.File
 
 class ForumRepository(
     private val apiService: ApiService,
@@ -111,6 +117,109 @@ class ForumRepository(
                     body = body.trim()
                 )
             ).toDomain(fallbackCommunity = communityName.trim())
+        } catch (throwable: Throwable) {
+            throw RepositoryException(throwable.toUserMessage())
+        }
+    }
+
+    suspend fun createLinkPost(communityName: String, title: String, url: String, body: String?): Post {
+        val sessionId = requireSessionId()
+        return try {
+            try {
+                apiService.createPost(
+                    sessionId = sessionId,
+                    request = CreatePostRequest(
+                        communityName = communityName.trim(),
+                        title = title.trim(),
+                        type = "LINK",
+                        body = body?.trim().takeUnless { it.isNullOrBlank() },
+                        url = url.trim()
+                    )
+                ).toDomain(fallbackCommunity = communityName.trim())
+            } catch (http: HttpException) {
+                if (http.code() !in listOf(400, 404, 405, 422)) {
+                    throw http
+                }
+
+                val fallbackBody = buildString {
+                    append(url.trim())
+                    val optionalBody = body?.trim().orEmpty()
+                    if (optionalBody.isNotBlank()) {
+                        append("\n\n")
+                        append(optionalBody)
+                    }
+                }
+
+                apiService.createPost(
+                    sessionId = sessionId,
+                    request = CreatePostRequest(
+                        communityName = communityName.trim(),
+                        title = title.trim(),
+                        type = "TEXT",
+                        body = fallbackBody
+                    )
+                ).toDomain(fallbackCommunity = communityName.trim())
+            }
+        } catch (throwable: Throwable) {
+            throw RepositoryException(throwable.toUserMessage())
+        }
+    }
+
+    suspend fun createMediaPost(
+        communityName: String,
+        title: String,
+        body: String?,
+        mediaBytes: ByteArray,
+        mediaFileName: String,
+        mediaMimeType: String
+    ): Post {
+        val sessionId = requireSessionId()
+        return try {
+            val payload = gson.toJson(
+                CreatePostRequest(
+                    communityName = communityName.trim(),
+                    title = title.trim(),
+                    type = "MEDIA",
+                    body = body?.trim().takeUnless { it.isNullOrBlank() }
+                )
+            ).toRequestBody("application/json".toMediaType())
+
+            val tempFile = File.createTempFile("upload_", "_${mediaFileName}")
+            tempFile.writeBytes(mediaBytes)
+
+            val mediaPart = MultipartBody.Part.createFormData(
+                "media",
+                mediaFileName,
+                tempFile.asRequestBody(mediaMimeType.toMediaType())
+            )
+
+            try {
+                try {
+                    apiService.createMediaPost(
+                        sessionId = sessionId,
+                        payload = payload,
+                        media = mediaPart
+                    ).toDomain(fallbackCommunity = communityName.trim())
+                } catch (http: HttpException) {
+                    if (http.code() !in listOf(404, 405, 415)) {
+                        throw http
+                    }
+
+                    val mediaBase64 = Base64.encodeToString(mediaBytes, Base64.NO_WRAP)
+                    apiService.createPost(
+                        sessionId = sessionId,
+                        request = CreatePostRequest(
+                            communityName = communityName.trim(),
+                            title = title.trim(),
+                            type = "MEDIA",
+                            body = body?.trim().takeUnless { it.isNullOrBlank() },
+                            mediaBase64 = mediaBase64
+                        )
+                    ).toDomain(fallbackCommunity = communityName.trim())
+                }
+            } finally {
+                tempFile.delete()
+            }
         } catch (throwable: Throwable) {
             throw RepositoryException(throwable.toUserMessage())
         }
@@ -311,6 +420,7 @@ class ForumRepository(
             body = body,
             url = url,
             mediaUrl = mediaUrl,
+            mediaBase64 = mediaBase64,
             score = score ?: 0,
             createdAt = createdAt ?: ""
         )

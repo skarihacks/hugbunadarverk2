@@ -53,7 +53,8 @@ data class CreatePostRequest(
     val title: String,
     val type: String,
     val body: String? = null,
-    val url: String? = null
+    val url: String? = null,
+    val mediaBase64: String? = null
 )
 
 data class CreateCommunityRequest(
