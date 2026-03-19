@@ -5,6 +5,7 @@ import android.net.Uri
 object Routes {
     const val FEED = "feed"
     const val COMMUNITIES = "communities"
+    const val SEARCH = "search"
     const val CREATE_POST = "create-post"
     const val CREATE_COMMUNITY = "create-community"
 
@@ -12,7 +13,10 @@ object Routes {
     const val POST_DETAIL = "post/{$POST_ID_ARG}"
     const val COMMUNITY_NAME_ARG = "communityName"
     const val COMMUNITY_PROFILE = "community/{$COMMUNITY_NAME_ARG}"
+    const val USERNAME_ARG = "username"
+    const val USER_PROFILE = "user/{$USERNAME_ARG}"
 
     fun postDetail(postId: String): String = "post/$postId"
     fun communityProfile(communityName: String): String = "community/${Uri.encode(communityName)}"
+    fun userProfile(username: String): String = "user/${Uri.encode(username)}"
 }

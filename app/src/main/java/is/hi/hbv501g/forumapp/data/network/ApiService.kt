@@ -51,6 +51,28 @@ interface ApiService {
         @Body request: CreateCommunityRequest
     ): CommunityResponse
 
+    @GET("api/communities")
+    suspend fun listCommunities(
+        @Query("q") query: String? = null
+    ): List<CommunityResponse>
+
+    @GET("api/communities/{name}")
+    suspend fun getCommunity(
+        @Path("name") name: String
+    ): CommunityResponse
+
+    @POST("api/communities/join")
+    suspend fun joinCommunity(
+        @Header("X-Session-Id") sessionId: String,
+        @Body request: MembershipRequest
+    )
+
+    @POST("api/communities/leave")
+    suspend fun leaveCommunity(
+        @Header("X-Session-Id") sessionId: String,
+        @Body request: MembershipRequest
+    )
+
     @GET("api/posts/{id}")
     suspend fun getPost(@Path("id") postId: String): PostResponse
 
@@ -63,4 +85,35 @@ interface ApiService {
         @Path("postId") postId: String,
         @Body request: CreateCommentRequest
     ): CommentResponse
+
+    @POST("api/votes")
+    suspend fun vote(
+        @Header("X-Session-Id") sessionId: String,
+        @Body request: VoteRequest
+    ): VoteResponse
+
+    @GET("api/search")
+    suspend fun search(
+        @Query("q") query: String
+    ): SearchResultsResponse
+
+    @GET("api/users/{username}")
+    suspend fun getUserProfile(
+        @Path("username") username: String,
+        @Query("sort") sort: String = "NEW",
+        @Query("page") page: Int = 0,
+        @Query("size") size: Int = 10
+    ): UserProfileResponse
+
+    @POST("api/moderation/posts/{postId}/remove")
+    suspend fun removePost(
+        @Header("X-Session-Id") sessionId: String,
+        @Path("postId") postId: String
+    )
+
+    @POST("api/moderation/comments/{commentId}/remove")
+    suspend fun removeComment(
+        @Header("X-Session-Id") sessionId: String,
+        @Path("commentId") commentId: String
+    )
 }

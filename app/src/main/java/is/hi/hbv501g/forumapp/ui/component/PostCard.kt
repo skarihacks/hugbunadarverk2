@@ -8,8 +8,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -28,10 +31,16 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.hbv501g.forumapp.BuildConfig
 import com.hbv501g.forumapp.data.model.Post
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 
 @Composable
 fun PostCard(
     post: Post,
+    score: Int = post.score,
+    onUpvote: (() -> Unit)? = null,
+    onDownvote: (() -> Unit)? = null,
     onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -94,11 +103,24 @@ fun PostCard(
                     maxLines = 4
                 )
             }
-            Text(
-                text = "Score ${post.score} • ${post.createdAt}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.secondary
-            )
+            Row {
+                if (onUpvote != null) {
+                    IconButton(onClick = onUpvote) {
+                        Icon(Icons.Default.ArrowUpward, contentDescription = "Upvote")
+                    }
+                }
+                if (onDownvote != null) {
+                    IconButton(onClick = onDownvote) {
+                        Icon(Icons.Default.ArrowDownward, contentDescription = "Downvote")
+                    }
+                }
+                Text(
+                    text = "Score $score • ${post.createdAt}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.padding(top = 14.dp)
+                )
+            }
         }
     }
 }

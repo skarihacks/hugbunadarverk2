@@ -25,7 +25,9 @@ import com.hbv501g.forumapp.ui.screen.FeedRoute
 import com.hbv501g.forumapp.ui.screen.LoginRoute
 import com.hbv501g.forumapp.ui.screen.PostDetailRoute
 import com.hbv501g.forumapp.ui.screen.Routes
+import com.hbv501g.forumapp.ui.screen.SearchRoute
 import com.hbv501g.forumapp.ui.screen.SignUpRoute
+import com.hbv501g.forumapp.ui.screen.UserProfileRoute
 import com.hbv501g.forumapp.ui.theme.ForumTheme
 
 @Composable
@@ -63,6 +65,9 @@ fun ForumApp(repository: ForumRepository) {
                                 onOpenCommunities = {
                                     navController.navigate(Routes.COMMUNITIES)
                                 },
+                                onOpenSearch = {
+                                    navController.navigate(Routes.SEARCH)
+                                },
                                 onCreatePost = {
                                     navController.navigate(Routes.CREATE_POST)
                                 },
@@ -78,6 +83,22 @@ fun ForumApp(repository: ForumRepository) {
                                 onBack = { navController.popBackStack() },
                                 onOpenCommunity = { name ->
                                     navController.navigate(Routes.communityProfile(name))
+                                }
+                            )
+                        }
+
+                        composable(Routes.SEARCH) {
+                            SearchRoute(
+                                repository = repository,
+                                onBack = { navController.popBackStack() },
+                                onOpenPost = { postId ->
+                                    navController.navigate(Routes.postDetail(postId))
+                                },
+                                onOpenCommunity = { name ->
+                                    navController.navigate(Routes.communityProfile(name))
+                                },
+                                onOpenUser = { username ->
+                                    navController.navigate(Routes.userProfile(username))
                                 }
                             )
                         }
@@ -129,6 +150,26 @@ fun ForumApp(repository: ForumRepository) {
                                 postId = postId,
                                 repository = repository,
                                 onBack = { navController.popBackStack() }
+                            )
+                        }
+
+                        composable(
+                            route = Routes.USER_PROFILE,
+                            arguments = listOf(navArgument(Routes.USERNAME_ARG) {
+                                type = NavType.StringType
+                            })
+                        ) { backStackEntry ->
+                            val encodedUsername = backStackEntry.arguments
+                                ?.getString(Routes.USERNAME_ARG)
+                                .orEmpty()
+                            val username = Uri.decode(encodedUsername)
+                            UserProfileRoute(
+                                username = username,
+                                repository = repository,
+                                onBack = { navController.popBackStack() },
+                                onOpenPost = { postId ->
+                                    navController.navigate(Routes.postDetail(postId))
+                                }
                             )
                         }
                     }

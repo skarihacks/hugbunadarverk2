@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -50,6 +51,7 @@ data class FeedUiState(
     val selectedSort: FeedSort = FeedSort.HOT,
     val posts: List<Post> = emptyList(),
     val joinedCommunities: Set<String> = emptySet(),
+    val voteOverrides: Map<String, Int> = emptyMap(),
     val isLoading: Boolean = true,
     val error: String? = null
 )
@@ -88,6 +90,26 @@ class FeedViewModel(private val repository: ForumRepository) : ViewModel() {
         }
     }
 
+    fun votePost(postId: String, direction: Int) {
+        val currentPost = _uiState.value.posts.firstOrNull { it.id == postId } ?: return
+        val currentScore = _uiState.value.voteOverrides[postId] ?: currentPost.score
+        val nextScore = currentScore + direction
+        _uiState.update { it.copy(voteOverrides = it.voteOverrides + (postId to nextScore)) }
+
+        viewModelScope.launch {
+            try {
+                repository.vote(postId, "POST", direction)
+            } catch (exception: RepositoryException) {
+                _uiState.update { state ->
+                    state.copy(
+                        voteOverrides = state.voteOverrides + (postId to currentScore),
+                        error = exception.message
+                    )
+                }
+            }
+        }
+    }
+
     private fun loadFeed(sort: FeedSort) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
@@ -115,6 +137,7 @@ fun FeedRoute(
     repository: ForumRepository,
     onOpenPost: (String) -> Unit,
     onOpenCommunities: () -> Unit,
+    onOpenSearch: () -> Unit,
     onCreatePost: () -> Unit,
     onCreateCommunity: () -> Unit
 ) {
@@ -128,7 +151,9 @@ fun FeedRoute(
         onSelectSort = viewModel::updateSort,
         onRefresh = viewModel::refresh,
         onOpenCommunities = onOpenCommunities,
+        onOpenSearch = onOpenSearch,
         onLogout = viewModel::logout,
+        onVotePost = viewModel::votePost,
         onOpenPost = onOpenPost,
         onCreatePost = onCreatePost,
         onCreateCommunity = onCreateCommunity
@@ -142,7 +167,9 @@ private fun FeedScreen(
     onSelectSort: (FeedSort) -> Unit,
     onRefresh: () -> Unit,
     onOpenCommunities: () -> Unit,
+    onOpenSearch: () -> Unit,
     onLogout: () -> Unit,
+    onVotePost: (String, Int) -> Unit,
     onOpenPost: (String) -> Unit,
     onCreatePost: () -> Unit,
     onCreateCommunity: () -> Unit
@@ -174,6 +201,9 @@ private fun FeedScreen(
                     }
                     IconButton(onClick = onOpenCommunities) {
                         Icon(Icons.Default.People, contentDescription = "Communities")
+                    }
+                    IconButton(onClick = onOpenSearch) {
+                        Icon(Icons.Default.Search, contentDescription = "Search")
                     }
                     IconButton(onClick = onLogout) {
                         Icon(Icons.Default.ExitToApp, contentDescription = "Logout")
@@ -226,6 +256,9 @@ private fun FeedScreen(
                     items(items = visiblePosts, key = { it.id }) { post ->
                         PostCard(
                             post = post,
+                            score = state.voteOverrides[post.id] ?: post.score,
+                            onUpvote = { onVotePost(post.id, 1) },
+                            onDownvote = { onVotePost(post.id, -1) },
                             onClick = { onOpenPost(post.id) }
                         )
                     }

@@ -36,6 +36,34 @@ data class Comment(
     val createdAt: String
 )
 
+data class Community(
+    val id: String,
+    val name: String,
+    val description: String?,
+    val createdAt: String = ""
+)
+
+data class SearchUser(
+    val id: String,
+    val username: String,
+    val status: String
+)
+
+data class SearchResults(
+    val posts: List<Post>,
+    val communities: List<Community>,
+    val users: List<SearchUser>
+)
+
+data class UserProfile(
+    val id: String,
+    val username: String,
+    val email: String,
+    val status: String,
+    val karma: Int,
+    val posts: Page<Post>
+)
+
 data class Page<T>(
     val items: List<T>,
     val page: Int,

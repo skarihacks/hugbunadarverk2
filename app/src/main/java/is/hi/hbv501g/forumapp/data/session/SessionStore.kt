@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.hbv501g.forumapp.data.model.UserSession
@@ -22,6 +23,8 @@ class SessionStore(private val context: Context) {
         private val USER_ID = stringPreferencesKey("user_id")
         private val USERNAME = stringPreferencesKey("username")
         private val EMAIL = stringPreferencesKey("email")
+        private val JOINED_COMMUNITIES = stringSetPreferencesKey("joined_communities")
+        private val OWNED_COMMUNITIES = stringSetPreferencesKey("owned_communities")
     }
 
     val sessionFlow: Flow<UserSession?> = context.dataStore.data
@@ -33,6 +36,26 @@ class SessionStore(private val context: Context) {
             }
         }
         .map { prefs -> prefs.toSession() }
+
+    val joinedCommunitiesFlow: Flow<Set<String>> = context.dataStore.data
+        .catch { exception ->
+            if (exception is IOException) {
+                emit(emptyPreferences())
+            } else {
+                throw exception
+            }
+        }
+        .map { prefs -> prefs[JOINED_COMMUNITIES] ?: emptySet() }
+
+    val ownedCommunitiesFlow: Flow<Set<String>> = context.dataStore.data
+        .catch { exception ->
+            if (exception is IOException) {
+                emit(emptyPreferences())
+            } else {
+                throw exception
+            }
+        }
+        .map { prefs -> prefs[OWNED_COMMUNITIES] ?: emptySet() }
 
     suspend fun saveSession(session: UserSession) {
         context.dataStore.edit { prefs ->
@@ -51,6 +74,18 @@ class SessionStore(private val context: Context) {
             prefs.remove(USER_ID)
             prefs.remove(USERNAME)
             prefs.remove(EMAIL)
+        }
+    }
+
+    suspend fun saveJoinedCommunities(communities: Set<String>) {
+        context.dataStore.edit { prefs ->
+            prefs[JOINED_COMMUNITIES] = communities
+        }
+    }
+
+    suspend fun saveOwnedCommunities(communities: Set<String>) {
+        context.dataStore.edit { prefs ->
+            prefs[OWNED_COMMUNITIES] = communities
         }
     }
 

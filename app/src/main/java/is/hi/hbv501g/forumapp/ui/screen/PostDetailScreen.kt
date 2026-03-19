@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -48,6 +49,10 @@ data class PostDetailUiState(
     val post: Post? = null,
     val comments: List<Comment> = emptyList(),
     val commentInput: String = "",
+    val postScoreOverride: Int? = null,
+    val commentScoreOverrides: Map<String, Int> = emptyMap(),
+    val currentUsername: String = "",
+    val ownedCommunities: Set<String> = emptySet(),
     val isLoading: Boolean = true,
     val isSubmittingComment: Boolean = false,
     val error: String? = null,
@@ -63,6 +68,16 @@ class PostDetailViewModel(
     val uiState = _uiState.asStateFlow()
 
     init {
+        viewModelScope.launch {
+            repository.sessionFlow.collect { session ->
+                _uiState.update { it.copy(currentUsername = session?.username.orEmpty()) }
+            }
+        }
+        viewModelScope.launch {
+            repository.ownedCommunitiesFlow.collect { owned ->
+                _uiState.update { it.copy(ownedCommunities = owned) }
+            }
+        }
         refresh()
     }
 
@@ -129,6 +144,62 @@ class PostDetailViewModel(
             }
         }
     }
+
+    fun votePost(direction: Int) {
+        val post = _uiState.value.post ?: return
+        val currentScore = _uiState.value.postScoreOverride ?: post.score
+        val nextScore = currentScore + direction
+        _uiState.update { it.copy(postScoreOverride = nextScore) }
+        viewModelScope.launch {
+            try {
+                repository.vote(post.id, "POST", direction)
+            } catch (exception: RepositoryException) {
+                _uiState.update { it.copy(postScoreOverride = currentScore, error = exception.message) }
+            }
+        }
+    }
+
+    fun voteComment(commentId: String, direction: Int) {
+        val comment = _uiState.value.comments.firstOrNull { it.id == commentId } ?: return
+        val currentScore = _uiState.value.commentScoreOverrides[commentId] ?: comment.score
+        val nextScore = currentScore + direction
+        _uiState.update { it.copy(commentScoreOverrides = it.commentScoreOverrides + (commentId to nextScore)) }
+        viewModelScope.launch {
+            try {
+                repository.vote(commentId, "COMMENT", direction)
+            } catch (exception: RepositoryException) {
+                _uiState.update {
+                    it.copy(
+                        commentScoreOverrides = it.commentScoreOverrides + (commentId to currentScore),
+                        commentError = exception.message
+                    )
+                }
+            }
+        }
+    }
+
+    fun removePost(onRemoved: () -> Unit) {
+        val post = _uiState.value.post ?: return
+        viewModelScope.launch {
+            try {
+                repository.removePost(post.id)
+                onRemoved()
+            } catch (exception: RepositoryException) {
+                _uiState.update { it.copy(error = exception.message) }
+            }
+        }
+    }
+
+    fun removeComment(commentId: String) {
+        viewModelScope.launch {
+            try {
+                repository.removeComment(commentId)
+                _uiState.update { it.copy(comments = it.comments.filterNot { comment -> comment.id == commentId }) }
+            } catch (exception: RepositoryException) {
+                _uiState.update { it.copy(commentError = exception.message) }
+            }
+        }
+    }
 }
 
 @Composable
@@ -148,7 +219,11 @@ fun PostDetailRoute(
         onBack = onBack,
         onRefresh = viewModel::refresh,
         onCommentInputChange = viewModel::updateCommentInput,
-        onSubmitComment = viewModel::submitComment
+        onSubmitComment = viewModel::submitComment,
+        onVotePost = viewModel::votePost,
+        onVoteComment = viewModel::voteComment,
+        onRemovePost = { viewModel.removePost(onBack) },
+        onRemoveComment = viewModel::removeComment
     )
 }
 
@@ -159,8 +234,17 @@ private fun PostDetailScreen(
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onCommentInputChange: (String) -> Unit,
-    onSubmitComment: () -> Unit
+    onSubmitComment: () -> Unit,
+    onVotePost: (Int) -> Unit,
+    onVoteComment: (String, Int) -> Unit,
+    onRemovePost: () -> Unit,
+    onRemoveComment: (String) -> Unit
 ) {
+    val canRemovePost = state.post?.let { post ->
+        state.currentUsername.equals(post.author, ignoreCase = true) ||
+            state.ownedCommunities.any { it.equals(post.community, ignoreCase = true) }
+    } == true
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -205,7 +289,20 @@ private fun PostDetailScreen(
             } else {
                 state.post?.let { post ->
                     item {
-                        PostCard(post = post)
+                        PostCard(
+                            post = post,
+                            score = state.postScoreOverride ?: post.score,
+                            onUpvote = { onVotePost(1) },
+                            onDownvote = { onVotePost(-1) }
+                        )
+                        if (canRemovePost) {
+                            Button(
+                                onClick = onRemovePost,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Remove post")
+                            }
+                        }
                     }
                 }
             }
@@ -260,14 +357,33 @@ private fun PostDetailScreen(
             }
 
             items(items = state.comments, key = { it.id }) { comment ->
-                CommentCard(comment = comment)
+                val canRemoveComment =
+                    state.currentUsername.equals(comment.author, ignoreCase = true) ||
+                        state.post?.let { post ->
+                            state.ownedCommunities.any { it.equals(post.community, ignoreCase = true) }
+                        } == true
+                CommentCard(
+                    comment = comment,
+                    score = state.commentScoreOverrides[comment.id] ?: comment.score,
+                    onUpvote = { onVoteComment(comment.id, 1) },
+                    onDownvote = { onVoteComment(comment.id, -1) },
+                    onRemove = { onRemoveComment(comment.id) },
+                    canRemove = canRemoveComment
+                )
             }
         }
     }
 }
 
 @Composable
-private fun CommentCard(comment: Comment) {
+private fun CommentCard(
+    comment: Comment,
+    score: Int,
+    onUpvote: () -> Unit,
+    onDownvote: () -> Unit,
+    onRemove: () -> Unit,
+    canRemove: Boolean
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -285,8 +401,21 @@ private fun CommentCard(comment: Comment) {
                 text = comment.body,
                 style = MaterialTheme.typography.bodyMedium
             )
+            androidx.compose.foundation.layout.Row {
+                Button(onClick = onUpvote) {
+                    Text("Upvote")
+                }
+                Button(onClick = onDownvote) {
+                    Text("Downvote")
+                }
+                if (canRemove) {
+                    Button(onClick = onRemove) {
+                        Text("Remove")
+                    }
+                }
+            }
             Text(
-                text = "Score ${comment.score} • ${comment.createdAt}",
+                text = "Score $score • ${comment.createdAt}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.secondary
             )

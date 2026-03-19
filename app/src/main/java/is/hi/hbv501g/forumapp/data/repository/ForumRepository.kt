@@ -6,33 +6,44 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.reflect.TypeToken
 import com.hbv501g.forumapp.data.model.Comment
+import com.hbv501g.forumapp.data.model.Community
 import com.hbv501g.forumapp.data.model.FeedSort
 import com.hbv501g.forumapp.data.model.Page
 import com.hbv501g.forumapp.data.model.Post
+import com.hbv501g.forumapp.data.model.SearchResults
+import com.hbv501g.forumapp.data.model.SearchUser
+import com.hbv501g.forumapp.data.model.UserProfile
 import com.hbv501g.forumapp.data.model.UserSession
 import com.hbv501g.forumapp.data.network.ApiService
 import com.hbv501g.forumapp.data.network.CommentResponse
+import com.hbv501g.forumapp.data.network.CommunityResponse
 import com.hbv501g.forumapp.data.network.CreateCommentRequest
 import com.hbv501g.forumapp.data.network.CreateCommunityRequest
 import com.hbv501g.forumapp.data.network.CreatePostRequest
 import com.hbv501g.forumapp.data.network.LoginRequest
+import com.hbv501g.forumapp.data.network.MembershipRequest
 import com.hbv501g.forumapp.data.network.PageResponse
 import com.hbv501g.forumapp.data.network.PostResponse
 import com.hbv501g.forumapp.data.network.RegisterRequest
+import com.hbv501g.forumapp.data.network.SearchResultsResponse
+import com.hbv501g.forumapp.data.network.UserProfileResponse
+import com.hbv501g.forumapp.data.network.VoteRequest
 import com.hbv501g.forumapp.data.session.SessionStore
 import java.io.IOException
+import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.runBlocking
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import retrofit2.HttpException
-import java.io.File
 
 class ForumRepository(
     private val apiService: ApiService,
@@ -42,9 +53,18 @@ class ForumRepository(
     private val postListType = object : TypeToken<List<PostResponse>>() {}.type
     private val postPageType = object : TypeToken<PageResponse<PostResponse>>() {}.type
     private val _joinedCommunities = MutableStateFlow<Set<String>>(emptySet())
+    private val _ownedCommunities = MutableStateFlow<Set<String>>(emptySet())
+
+    init {
+        runBlocking {
+            _joinedCommunities.value = sessionStore.joinedCommunitiesFlow.first()
+            _ownedCommunities.value = sessionStore.ownedCommunitiesFlow.first()
+        }
+    }
 
     val sessionFlow: Flow<UserSession?> = sessionStore.sessionFlow
     val joinedCommunitiesFlow: StateFlow<Set<String>> = _joinedCommunities.asStateFlow()
+    val ownedCommunitiesFlow: StateFlow<Set<String>> = _ownedCommunities.asStateFlow()
 
     suspend fun register(username: String, email: String, password: String) {
         try {
@@ -93,7 +113,10 @@ class ForumRepository(
             runCatching { apiService.logout(sessionId) }
         }
         sessionStore.clearSession()
+        sessionStore.saveJoinedCommunities(emptySet())
+        sessionStore.saveOwnedCommunities(emptySet())
         _joinedCommunities.value = emptySet()
+        _ownedCommunities.value = emptySet()
     }
 
     suspend fun getFeed(sort: FeedSort, page: Int = 0, size: Int = 25): Page<Post> {
@@ -235,6 +258,10 @@ class ForumRepository(
                     description = description?.trim().takeUnless { it.isNullOrBlank() }
                 )
             )
+            setCommunityJoined(response.name, joined = true)
+            setCommunityOwned(response.name, owned = true)
+            sessionStore.saveJoinedCommunities(_joinedCommunities.value)
+            sessionStore.saveOwnedCommunities(_ownedCommunities.value)
             response.name
         } catch (throwable: Throwable) {
             throw RepositoryException(throwable.toUserMessage())
@@ -271,15 +298,23 @@ class ForumRepository(
     }
 
     suspend fun listCommunities(sort: FeedSort = FeedSort.HOT, size: Int = 100): List<String> {
-        val page = getFeed(sort = sort, page = 0, size = size)
-        return page.items
-            .map { it.community.trim() }
-            .filter { it.isNotBlank() }
-            .distinctBy { it.lowercase() }
-            .sortedBy { it.lowercase() }
+        return try {
+            apiService.listCommunities()
+                .map { it.name.trim() }
+                .filter { it.isNotBlank() }
+                .distinctBy { it.lowercase() }
+                .sortedBy { it.lowercase() }
+        } catch (_: Throwable) {
+            val page = getFeed(sort = sort, page = 0, size = size)
+            page.items
+                .map { it.community.trim() }
+                .filter { it.isNotBlank() }
+                .distinctBy { it.lowercase() }
+                .sortedBy { it.lowercase() }
+        }
     }
 
-    fun setCommunityJoined(communityName: String, joined: Boolean) {
+    private fun setCommunityJoined(communityName: String, joined: Boolean) {
         val normalized = communityName.trim()
         if (normalized.isBlank()) {
             return
@@ -295,13 +330,107 @@ class ForumRepository(
         }
     }
 
-    fun toggleCommunityMembership(communityName: String) {
+    private fun setCommunityOwned(communityName: String, owned: Boolean) {
+        val normalized = communityName.trim()
+        if (normalized.isBlank()) {
+            return
+        }
+
+        _ownedCommunities.update { current ->
+            val existing = current.firstOrNull { it.equals(normalized, ignoreCase = true) }
+            if (owned) {
+                if (existing == null) current + normalized else current
+            } else {
+                if (existing == null) current else current - existing
+            }
+        }
+    }
+
+    suspend fun joinCommunity(communityName: String) {
+        val sessionId = requireSessionId()
+        try {
+            apiService.joinCommunity(
+                sessionId = sessionId,
+                request = MembershipRequest(communityName = communityName.trim())
+            )
+            setCommunityJoined(communityName, joined = true)
+            sessionStore.saveJoinedCommunities(_joinedCommunities.value)
+        } catch (throwable: Throwable) {
+            throw RepositoryException(throwable.toUserMessage())
+        }
+    }
+
+    suspend fun leaveCommunity(communityName: String) {
+        val sessionId = requireSessionId()
+        try {
+            apiService.leaveCommunity(
+                sessionId = sessionId,
+                request = MembershipRequest(communityName = communityName.trim())
+            )
+            setCommunityJoined(communityName, joined = false)
+            sessionStore.saveJoinedCommunities(_joinedCommunities.value)
+        } catch (throwable: Throwable) {
+            throw RepositoryException(throwable.toUserMessage())
+        }
+    }
+
+    suspend fun toggleCommunityMembership(communityName: String) {
         val normalized = communityName.trim()
         if (normalized.isBlank()) {
             return
         }
         val alreadyJoined = _joinedCommunities.value.any { it.equals(normalized, ignoreCase = true) }
-        setCommunityJoined(communityName = normalized, joined = !alreadyJoined)
+        if (alreadyJoined) leaveCommunity(normalized) else joinCommunity(normalized)
+    }
+
+    suspend fun vote(targetId: String, targetType: String, direction: Int) {
+        val sessionId = requireSessionId()
+        try {
+            apiService.vote(
+                sessionId = sessionId,
+                request = VoteRequest(
+                    targetId = targetId,
+                    targetType = targetType,
+                    direction = direction
+                )
+            )
+        } catch (throwable: Throwable) {
+            throw RepositoryException(throwable.toUserMessage())
+        }
+    }
+
+    suspend fun search(query: String): SearchResults {
+        return try {
+            apiService.search(query.trim()).toDomain()
+        } catch (throwable: Throwable) {
+            throw RepositoryException(throwable.toUserMessage())
+        }
+    }
+
+    suspend fun getUserProfile(username: String): UserProfile {
+        return try {
+            apiService.getUserProfile(username.trim()).toDomain()
+        } catch (throwable: Throwable) {
+            throw RepositoryException(throwable.toUserMessage())
+        }
+    }
+
+    suspend fun removePost(postId: String) {
+        val sessionId = requireSessionId()
+        try {
+            apiService.removePost(sessionId = sessionId, postId = postId)
+        } catch (throwable: Throwable) {
+            throw RepositoryException(throwable.toUserMessage())
+        }
+    }
+
+    suspend fun removeComment(commentId: String) {
+        val sessionId = requireSessionId()
+        try {
+            apiService.removeComment(sessionId = sessionId, commentId = commentId)
+        } catch (throwable: Throwable) {
+            throw RepositoryException(throwable.toUserMessage())
+        }
     }
 
     private suspend fun requireSessionId(): String {
@@ -407,8 +536,17 @@ class ForumRepository(
 
     private fun PostResponse.toDomain(fallbackCommunity: String?): Post {
         val postId = id?.takeIf { it.isNotBlank() } ?: throw RepositoryException("Post response missing id")
-        val communityName = firstNonBlank(community, communityId, fallbackCommunity) ?: "unknown"
-        val authorName = firstNonBlank(author, authorId) ?: "unknown"
+        val communityName = firstNonBlank(
+            extractCommunityName(community),
+            communityName,
+            communityId,
+            fallbackCommunity
+        ) ?: "unknown"
+        val authorName = firstNonBlank(
+            extractAuthorName(author),
+            authorUsername,
+            authorId
+        ) ?: "unknown"
         val postTitle = title?.takeIf { it.isNotBlank() } ?: "(untitled)"
 
         return Post(
@@ -437,10 +575,107 @@ class ForumRepository(
         return Comment(
             id = commentId,
             postId = commentPostId,
-            author = author?.takeIf { it.isNotBlank() } ?: "unknown",
+            author = firstNonBlank(
+                extractAuthorName(author),
+                authorUsername
+            ) ?: "unknown",
             body = body?.takeIf { it.isNotBlank() } ?: "",
             score = score ?: 0,
             createdAt = createdAt ?: ""
+        )
+    }
+
+    private fun extractAuthorName(element: JsonElement?): String? {
+        return extractStringValue(
+            element = element,
+            preferredKeys = listOf("username", "authorUsername", "name", "displayName", "id")
+        )
+    }
+
+    private fun extractCommunityName(element: JsonElement?): String? {
+        return extractStringValue(
+            element = element,
+            preferredKeys = listOf("name", "communityName", "title", "id")
+        )
+    }
+
+    private fun extractStringValue(element: JsonElement?, preferredKeys: List<String>): String? {
+        if (element == null || element.isJsonNull) {
+            return null
+        }
+
+        if (element.isJsonPrimitive) {
+            return element.asString?.trim()?.takeIf { it.isNotBlank() }
+        }
+
+        if (!element.isJsonObject) {
+            return null
+        }
+
+        val obj = element.asJsonObject
+        preferredKeys.forEach { key ->
+            val value = obj.get(key)
+            if (value != null && value.isJsonPrimitive) {
+                val text = value.asString?.trim()
+                if (!text.isNullOrBlank()) {
+                    return text
+                }
+            }
+        }
+
+        return obj.entrySet()
+            .firstNotNullOfOrNull { (_, value) ->
+                if (value != null && value.isJsonPrimitive) {
+                    value.asString?.trim()?.takeIf { it.isNotBlank() }
+                } else {
+                    null
+                }
+            }
+    }
+
+    private fun CommunityResponse.toDomain(): Community {
+        return Community(
+            id = id,
+            name = name,
+            description = description,
+            createdAt = createdAt
+        )
+    }
+
+    private fun SearchResultsResponse.toDomain(): SearchResults {
+        return SearchResults(
+            posts = posts.map { it.toDomain() },
+            communities = communities.map {
+                Community(
+                    id = it.id,
+                    name = it.name,
+                    description = it.description
+                )
+            },
+            users = users.map {
+                SearchUser(
+                    id = it.id,
+                    username = it.username,
+                    status = it.status
+                )
+            }
+        )
+    }
+
+    private fun UserProfileResponse.toDomain(): UserProfile {
+        return UserProfile(
+            id = user.id,
+            username = user.username,
+            email = user.email,
+            status = user.status,
+            karma = user.karma,
+            posts = Page(
+                items = posts.items.map { it.toDomain() },
+                page = posts.page,
+                size = posts.size,
+                totalElements = posts.totalElements,
+                totalPages = posts.totalPages
+            )
         )
     }
 }

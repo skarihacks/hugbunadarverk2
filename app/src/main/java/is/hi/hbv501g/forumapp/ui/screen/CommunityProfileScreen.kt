@@ -24,6 +24,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hbv501g.forumapp.data.repository.ForumRepository
+import com.hbv501g.forumapp.data.repository.RepositoryException
 import com.hbv501g.forumapp.ui.component.simpleViewModelFactory
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,7 +34,8 @@ import kotlinx.coroutines.launch
 
 data class CommunityProfileUiState(
     val communityName: String,
-    val isJoined: Boolean = false
+    val isJoined: Boolean = false,
+    val error: String? = null
 )
 
 class CommunityProfileViewModel(
@@ -57,7 +59,13 @@ class CommunityProfileViewModel(
     }
 
     fun toggleMembership() {
-        repository.toggleCommunityMembership(normalizedName)
+        viewModelScope.launch {
+            try {
+                repository.toggleCommunityMembership(normalizedName)
+            } catch (exception: RepositoryException) {
+                _uiState.update { it.copy(error = exception.message) }
+            }
+        }
     }
 }
 
@@ -119,6 +127,9 @@ private fun CommunityProfileScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.secondary
             )
+            if (!state.error.isNullOrBlank()) {
+                Text(text = state.error, color = MaterialTheme.colorScheme.error)
+            }
             Button(
                 onClick = onToggleMembership,
                 modifier = Modifier.fillMaxWidth()
