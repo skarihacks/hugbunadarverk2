@@ -23,8 +23,9 @@ class SessionStore(private val context: Context) {
         private val USER_ID = stringPreferencesKey("user_id")
         private val USERNAME = stringPreferencesKey("username")
         private val EMAIL = stringPreferencesKey("email")
-        private val JOINED_COMMUNITIES = stringSetPreferencesKey("joined_communities")
-        private val OWNED_COMMUNITIES = stringSetPreferencesKey("owned_communities")
+
+        private fun joinedKey(userId: String) = stringSetPreferencesKey("joined_communities_$userId")
+        private fun ownedKey(userId: String) = stringSetPreferencesKey("owned_communities_$userId")
     }
 
     val sessionFlow: Flow<UserSession?> = context.dataStore.data
@@ -36,26 +37,6 @@ class SessionStore(private val context: Context) {
             }
         }
         .map { prefs -> prefs.toSession() }
-
-    val joinedCommunitiesFlow: Flow<Set<String>> = context.dataStore.data
-        .catch { exception ->
-            if (exception is IOException) {
-                emit(emptyPreferences())
-            } else {
-                throw exception
-            }
-        }
-        .map { prefs -> prefs[JOINED_COMMUNITIES] ?: emptySet() }
-
-    val ownedCommunitiesFlow: Flow<Set<String>> = context.dataStore.data
-        .catch { exception ->
-            if (exception is IOException) {
-                emit(emptyPreferences())
-            } else {
-                throw exception
-            }
-        }
-        .map { prefs -> prefs[OWNED_COMMUNITIES] ?: emptySet() }
 
     suspend fun saveSession(session: UserSession) {
         context.dataStore.edit { prefs ->
@@ -77,15 +58,25 @@ class SessionStore(private val context: Context) {
         }
     }
 
-    suspend fun saveJoinedCommunities(communities: Set<String>) {
+    suspend fun loadJoinedCommunities(userId: String): Set<String> =
+        context.dataStore.data.catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+            .map { prefs -> prefs[joinedKey(userId)] ?: emptySet() }
+            .first()
+
+    suspend fun loadOwnedCommunities(userId: String): Set<String> =
+        context.dataStore.data.catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+            .map { prefs -> prefs[ownedKey(userId)] ?: emptySet() }
+            .first()
+
+    suspend fun saveJoinedCommunities(userId: String, communities: Set<String>) {
         context.dataStore.edit { prefs ->
-            prefs[JOINED_COMMUNITIES] = communities
+            prefs[joinedKey(userId)] = communities
         }
     }
 
-    suspend fun saveOwnedCommunities(communities: Set<String>) {
+    suspend fun saveOwnedCommunities(userId: String, communities: Set<String>) {
         context.dataStore.edit { prefs ->
-            prefs[OWNED_COMMUNITIES] = communities
+            prefs[ownedKey(userId)] = communities
         }
     }
 

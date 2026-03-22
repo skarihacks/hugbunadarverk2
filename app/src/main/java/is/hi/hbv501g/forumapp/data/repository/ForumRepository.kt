@@ -56,8 +56,11 @@ class ForumRepository(
 
     init {
         runBlocking {
-            _joinedCommunities.value = sessionStore.joinedCommunitiesFlow.first()
-            _ownedCommunities.value = sessionStore.ownedCommunitiesFlow.first()
+            val userId = sessionStore.sessionFlow.first()?.userId
+            if (userId != null) {
+                _joinedCommunities.value = sessionStore.loadJoinedCommunities(userId)
+                _ownedCommunities.value = sessionStore.loadOwnedCommunities(userId)
+            }
         }
     }
 
@@ -93,14 +96,17 @@ class ForumRepository(
                     password = password
                 )
             )
+            val userId = response.user.id
             sessionStore.saveSession(
                 UserSession(
                     sessionId = response.sessionId,
-                    userId = response.user.id,
+                    userId = userId,
                     username = response.user.username,
                     email = response.user.email
                 )
             )
+            _joinedCommunities.value = sessionStore.loadJoinedCommunities(userId)
+            _ownedCommunities.value = sessionStore.loadOwnedCommunities(userId)
         } catch (throwable: Throwable) {
             throw RepositoryException(throwable.toUserMessage())
         }
@@ -112,8 +118,6 @@ class ForumRepository(
             runCatching { apiService.logout(sessionId) }
         }
         sessionStore.clearSession()
-        sessionStore.saveJoinedCommunities(emptySet())
-        sessionStore.saveOwnedCommunities(emptySet())
         _joinedCommunities.value = emptySet()
         _ownedCommunities.value = emptySet()
     }
@@ -259,8 +263,9 @@ class ForumRepository(
             )
             setCommunityJoined(response.name, joined = true)
             setCommunityOwned(response.name, owned = true)
-            sessionStore.saveJoinedCommunities(_joinedCommunities.value)
-            sessionStore.saveOwnedCommunities(_ownedCommunities.value)
+            val userId = requireUserId()
+            sessionStore.saveJoinedCommunities(userId, _joinedCommunities.value)
+            sessionStore.saveOwnedCommunities(userId, _ownedCommunities.value)
             response.name
         } catch (throwable: Throwable) {
             throw RepositoryException(throwable.toUserMessage())
@@ -353,7 +358,7 @@ class ForumRepository(
                 request = MembershipRequest(communityName = communityName.trim())
             )
             setCommunityJoined(communityName, joined = true)
-            sessionStore.saveJoinedCommunities(_joinedCommunities.value)
+            sessionStore.saveJoinedCommunities(requireUserId(), _joinedCommunities.value)
         } catch (throwable: Throwable) {
             throw RepositoryException(throwable.toUserMessage())
         }
@@ -367,7 +372,7 @@ class ForumRepository(
                 request = MembershipRequest(communityName = communityName.trim())
             )
             setCommunityJoined(communityName, joined = false)
-            sessionStore.saveJoinedCommunities(_joinedCommunities.value)
+            sessionStore.saveJoinedCommunities(requireUserId(), _joinedCommunities.value)
         } catch (throwable: Throwable) {
             throw RepositoryException(throwable.toUserMessage())
         }
@@ -434,6 +439,10 @@ class ForumRepository(
 
     private suspend fun requireSessionId(): String {
         return sessionStore.currentSessionId() ?: throw RepositoryException("Session expired. Please log in again.")
+    }
+
+    private suspend fun requireUserId(): String {
+        return sessionStore.sessionFlow.first()?.userId ?: throw RepositoryException("Session expired. Please log in again.")
     }
 
     private fun isMessageUsable(message: String?): Boolean {
