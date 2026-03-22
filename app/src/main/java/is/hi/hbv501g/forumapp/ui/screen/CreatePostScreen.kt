@@ -11,6 +11,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -23,6 +27,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -36,6 +43,7 @@ import com.hbv501g.forumapp.ui.component.simpleViewModelFactory
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -53,6 +61,7 @@ data class SelectedMedia(
 
 data class CreatePostUiState(
     val type: PostDraftType = PostDraftType.TEXT,
+    val joinedCommunities: List<String> = emptyList(),
     val communityName: String = "",
     val title: String = "",
     val body: String = "",
@@ -67,6 +76,23 @@ class CreatePostViewModel(private val repository: ForumRepository) : ViewModel()
 
     private val _uiState = MutableStateFlow(CreatePostUiState())
     val uiState = _uiState.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            repository.joinedCommunitiesFlow.collect { joined ->
+                val communities = joined.sortedBy { it.lowercase() }
+                _uiState.update { state ->
+                    val currentSelection = state.communityName.takeIf { selected ->
+                        communities.any { it.equals(selected, ignoreCase = true) }
+                    }
+                    state.copy(
+                        joinedCommunities = communities,
+                        communityName = currentSelection ?: communities.firstOrNull().orEmpty()
+                    )
+                }
+            }
+        }
+    }
 
     fun updateType(value: PostDraftType) {
         _uiState.update {
@@ -176,7 +202,11 @@ class CreatePostViewModel(private val repository: ForumRepository) : ViewModel()
     }
 
     private fun validate(state: CreatePostUiState): String? {
+        if (state.joinedCommunities.isEmpty()) return "Join a community before creating a post"
         if (state.communityName.isBlank()) return "Community is required"
+        if (state.joinedCommunities.none { it.equals(state.communityName, ignoreCase = true) }) {
+            return "Choose one of your joined communities"
+        }
         if (state.title.isBlank()) return "Title is required"
 
         return when (state.type) {
@@ -248,6 +278,7 @@ private fun CreatePostScreen(
     onSubmit: () -> Unit
 ) {
     val context = LocalContext.current
+    var communityMenuExpanded by remember { mutableStateOf(false) }
     val mediaPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri == null) {
             return@rememberLauncherForActivityResult
@@ -298,14 +329,57 @@ private fun CreatePostScreen(
                 }
             }
 
-            OutlinedTextField(
-                value = state.communityName,
-                onValueChange = onCommunityChange,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Community name") },
-                singleLine = true,
-                enabled = !state.isSubmitting
-            )
+            ExposedDropdownMenuBox(
+                expanded = communityMenuExpanded,
+                onExpandedChange = { shouldExpand ->
+                    if (!state.isSubmitting && state.joinedCommunities.isNotEmpty()) {
+                        communityMenuExpanded = shouldExpand
+                    }
+                }
+            ) {
+                OutlinedTextField(
+                    value = if (state.communityName.isBlank()) "" else "r/${state.communityName}",
+                    onValueChange = {},
+                    modifier = Modifier
+                        .menuAnchor()
+                        .fillMaxWidth(),
+                    label = { Text("Community") },
+                    placeholder = {
+                        if (state.joinedCommunities.isEmpty()) {
+                            Text("Join a community to post")
+                        }
+                    },
+                    singleLine = true,
+                    readOnly = true,
+                    enabled = !state.isSubmitting && state.joinedCommunities.isNotEmpty(),
+                    trailingIcon = {
+                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = communityMenuExpanded)
+                    }
+                )
+
+                DropdownMenu(
+                    expanded = communityMenuExpanded,
+                    onDismissRequest = { communityMenuExpanded = false }
+                ) {
+                    state.joinedCommunities.forEach { community ->
+                        DropdownMenuItem(
+                            text = { Text("r/$community") },
+                            onClick = {
+                                onCommunityChange(community)
+                                communityMenuExpanded = false
+                            }
+                        )
+                    }
+                }
+            }
+
+            if (state.joinedCommunities.isEmpty()) {
+                Text(
+                    text = "You need to join a community before you can create a post.",
+                    color = MaterialTheme.colorScheme.secondary,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
 
             OutlinedTextField(
                 value = state.title,
@@ -356,8 +430,7 @@ private fun CreatePostScreen(
                 value = state.body,
                 onValueChange = onBodyChange,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
+                    .fillMaxWidth(),
                 label = {
                     val label = when (state.type) {
                         PostDraftType.TEXT -> "Body"
@@ -378,7 +451,7 @@ private fun CreatePostScreen(
 
             Button(
                 onClick = onSubmit,
-                enabled = !state.isSubmitting,
+                enabled = !state.isSubmitting && state.joinedCommunities.isNotEmpty(),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(if (state.isSubmitting) "Posting..." else "Post")

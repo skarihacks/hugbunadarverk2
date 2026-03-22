@@ -19,7 +19,7 @@ data class UserResponse(
     val id: String,
     val username: String,
     val email: String,
-    val status: String
+    val status: String?
 )
 
 data class AuthSessionResponse(
@@ -123,7 +123,7 @@ data class SearchCommunityResponse(
 data class SearchUserResponse(
     val id: String,
     val username: String,
-    val status: String
+    val status: String?
 )
 
 data class UserProfileResponse(
@@ -135,6 +135,6 @@ data class UserSummaryResponse(
     val id: String,
     val username: String,
     val email: String,
-    val status: String,
+    val status: String?,
     val karma: Int
 )

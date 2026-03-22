@@ -26,7 +26,6 @@ import com.hbv501g.forumapp.data.network.PageResponse
 import com.hbv501g.forumapp.data.network.PostResponse
 import com.hbv501g.forumapp.data.network.RegisterRequest
 import com.hbv501g.forumapp.data.network.SearchResultsResponse
-import com.hbv501g.forumapp.data.network.UserProfileResponse
 import com.hbv501g.forumapp.data.network.VoteRequest
 import com.hbv501g.forumapp.data.session.SessionStore
 import java.io.IOException
@@ -409,7 +408,7 @@ class ForumRepository(
 
     suspend fun getUserProfile(username: String): UserProfile {
         return try {
-            apiService.getUserProfile(username.trim()).toDomain()
+            apiService.getUserProfile(username.trim()).toUserProfile()
         } catch (throwable: Throwable) {
             throw RepositoryException(throwable.toUserMessage())
         }
@@ -656,27 +655,57 @@ class ForumRepository(
                 SearchUser(
                     id = it.id,
                     username = it.username,
-                    status = it.status
+                    status = it.status?.takeIf { value -> value.isNotBlank() } ?: "No status"
                 )
             }
         )
     }
 
-    private fun UserProfileResponse.toDomain(): UserProfile {
-        return UserProfile(
-            id = user.id,
-            username = user.username,
-            email = user.email,
-            status = user.status,
-            karma = user.karma,
-            posts = Page(
-                items = posts.items.map { it.toDomain() },
-                page = posts.page,
-                size = posts.size,
-                totalElements = posts.totalElements,
-                totalPages = posts.totalPages
+    private fun JsonElement.toUserProfile(): UserProfile {
+        if (!isJsonObject) {
+            throw RepositoryException("Unexpected user profile response format")
+        }
+
+        val obj = asJsonObject
+        val userObj = obj.getAsJsonObject("user")
+            ?: obj
+        val postsElement = obj.get("posts")
+
+        val profilePosts = when {
+            postsElement == null || postsElement.isJsonNull -> Page(
+                items = emptyList(),
+                page = 0,
+                size = 0,
+                totalElements = 0,
+                totalPages = 0
             )
+            postsElement.isJsonArray -> {
+                val posts: List<PostResponse> = gson.fromJson(postsElement, postListType) ?: emptyList()
+                Page(
+                    items = posts.map { it.toDomain() },
+                    page = 0,
+                    size = posts.size,
+                    totalElements = posts.size.toLong(),
+                    totalPages = 1
+                )
+            }
+            postsElement.isJsonObject -> parsePostPageObject(postsElement.asJsonObject)
+            else -> throw RepositoryException("Unexpected posts format in user profile")
+        }
+
+        return UserProfile(
+            id = userObj.stringOrEmpty("id"),
+            username = userObj.stringOrEmpty("username"),
+            email = userObj.stringOrEmpty("email"),
+            status = userObj.get("status")?.takeIf { !it.isJsonNull }?.asString?.takeIf { it.isNotBlank() }
+                ?: "No status",
+            karma = runCatching { userObj.get("karma")?.asInt }.getOrNull() ?: 0,
+            posts = profilePosts
         )
+    }
+
+    private fun JsonObject.stringOrEmpty(name: String): String {
+        return runCatching { get(name)?.takeIf { !it.isJsonNull }?.asString }.getOrNull().orEmpty()
     }
 }
 

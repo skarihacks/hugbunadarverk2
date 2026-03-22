@@ -103,7 +103,7 @@ interface ApiService {
         @Query("sort") sort: String = "NEW",
         @Query("page") page: Int = 0,
         @Query("size") size: Int = 10
-    ): UserProfileResponse
+    ): JsonElement
 
     @POST("api/moderation/posts/{postId}/remove")
     suspend fun removePost(
