@@ -5,6 +5,12 @@ import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.reflect.TypeToken
+import com.hbv501g.forumapp.data.db.CommentDao
+import com.hbv501g.forumapp.data.db.CommentEntity
+import com.hbv501g.forumapp.data.db.CommunityDao
+import com.hbv501g.forumapp.data.db.CommunityEntity
+import com.hbv501g.forumapp.data.db.PostDao
+import com.hbv501g.forumapp.data.db.PostEntity
 import com.hbv501g.forumapp.data.model.Comment
 import com.hbv501g.forumapp.data.model.Community
 import com.hbv501g.forumapp.data.model.FeedSort
@@ -46,7 +52,10 @@ import retrofit2.HttpException
 
 class ForumRepository(
     private val apiService: ApiService,
-    private val sessionStore: SessionStore
+    private val sessionStore: SessionStore,
+    private val postDao: PostDao,
+    private val commentDao: CommentDao,
+    private val communityDao: CommunityDao
 ) {
     private val gson = Gson()
     private val postListType = object : TypeToken<List<PostResponse>>() {}.type
@@ -120,14 +129,30 @@ class ForumRepository(
         sessionStore.clearSession()
         _joinedCommunities.value = emptySet()
         _ownedCommunities.value = emptySet()
+        postDao.deleteAll()
+        commentDao.deleteAll()
+        communityDao.deleteAll()
     }
 
     suspend fun getFeed(sort: FeedSort, page: Int = 0, size: Int = 25): Page<Post> {
         return try {
             val raw = apiService.listFeed(sort = sort.name, page = page, size = size)
-            raw.toPostPage()
+            val feedPage = raw.toPostPage()
+            postDao.insertAll(feedPage.items.map { it.toEntity() })
+            feedPage
         } catch (throwable: Throwable) {
-            throw RepositoryException(throwable.toUserMessage())
+            val cached = postDao.getAll()
+            if (cached.isNotEmpty()) {
+                Page(
+                    items = cached.map { it.toDomain() },
+                    page = 0,
+                    size = cached.size,
+                    totalElements = cached.size.toLong(),
+                    totalPages = 1
+                )
+            } else {
+                throw RepositoryException(throwable.toUserMessage())
+            }
         }
     }
 
@@ -274,17 +299,28 @@ class ForumRepository(
 
     suspend fun getPost(postId: String): Post {
         return try {
-            apiService.getPost(postId).toDomain()
+            val post = apiService.getPost(postId).toDomain()
+            postDao.insert(post.toEntity())
+            post
         } catch (throwable: Throwable) {
-            throw RepositoryException(throwable.toUserMessage())
+            postDao.getById(postId)?.toDomain()
+                ?: throw RepositoryException(throwable.toUserMessage())
         }
     }
 
     suspend fun getComments(postId: String): List<Comment> {
         return try {
-            apiService.listComments(postId).map { it.toDomain() }
+            val comments = apiService.listComments(postId).map { it.toDomain() }
+            commentDao.deleteByPostId(postId)
+            commentDao.insertAll(comments.map { it.toEntity() })
+            comments
         } catch (throwable: Throwable) {
-            throw RepositoryException(throwable.toUserMessage())
+            val cached = commentDao.getByPostId(postId)
+            if (cached.isNotEmpty()) {
+                cached.map { it.toDomain() }
+            } else {
+                throw RepositoryException(throwable.toUserMessage())
+            }
         }
     }
 
@@ -303,18 +339,28 @@ class ForumRepository(
 
     suspend fun listCommunities(sort: FeedSort = FeedSort.HOT, size: Int = 100): List<String> {
         return try {
-            apiService.listCommunities()
+            val communities = apiService.listCommunities()
+            communityDao.insertAll(communities.map { it.toDomain().toEntity() })
+            communities
                 .map { it.name.trim() }
                 .filter { it.isNotBlank() }
                 .distinctBy { it.lowercase() }
                 .sortedBy { it.lowercase() }
         } catch (_: Throwable) {
-            val page = getFeed(sort = sort, page = 0, size = size)
-            page.items
-                .map { it.community.trim() }
-                .filter { it.isNotBlank() }
-                .distinctBy { it.lowercase() }
-                .sortedBy { it.lowercase() }
+            val cached = communityDao.getAll()
+            if (cached.isNotEmpty()) {
+                cached.map { it.name }
+                    .filter { it.isNotBlank() }
+                    .distinctBy { it.lowercase() }
+                    .sortedBy { it.lowercase() }
+            } else {
+                val page = getFeed(sort = sort, page = 0, size = size)
+                page.items
+                    .map { it.community.trim() }
+                    .filter { it.isNotBlank() }
+                    .distinctBy { it.lowercase() }
+                    .sortedBy { it.lowercase() }
+            }
         }
     }
 
@@ -423,6 +469,7 @@ class ForumRepository(
         val sessionId = requireSessionId()
         try {
             apiService.removePost(sessionId = sessionId, postId = postId)
+            postDao.deleteById(postId)
         } catch (throwable: Throwable) {
             throw RepositoryException(throwable.toUserMessage())
         }
@@ -432,6 +479,7 @@ class ForumRepository(
         val sessionId = requireSessionId()
         try {
             apiService.removeComment(sessionId = sessionId, commentId = commentId)
+            commentDao.deleteById(commentId)
         } catch (throwable: Throwable) {
             throw RepositoryException(throwable.toUserMessage())
         }
@@ -716,6 +764,59 @@ class ForumRepository(
     private fun JsonObject.stringOrEmpty(name: String): String {
         return runCatching { get(name)?.takeIf { !it.isJsonNull }?.asString }.getOrNull().orEmpty()
     }
+
+    private fun Post.toEntity(): PostEntity = PostEntity(
+        id = id,
+        community = community,
+        author = author,
+        title = title,
+        type = type,
+        body = body,
+        url = url,
+        mediaUrl = mediaUrl,
+        mediaBase64 = mediaBase64,
+        score = score,
+        createdAt = createdAt
+    )
+
+    private fun PostEntity.toDomain(): Post = Post(
+        id = id,
+        community = community,
+        author = author,
+        title = title,
+        type = type,
+        body = body,
+        url = url,
+        mediaUrl = mediaUrl,
+        mediaBase64 = mediaBase64,
+        score = score,
+        createdAt = createdAt
+    )
+
+    private fun Comment.toEntity(): CommentEntity = CommentEntity(
+        id = id,
+        postId = postId,
+        author = author,
+        body = body,
+        score = score,
+        createdAt = createdAt
+    )
+
+    private fun CommentEntity.toDomain(): Comment = Comment(
+        id = id,
+        postId = postId,
+        author = author,
+        body = body,
+        score = score,
+        createdAt = createdAt
+    )
+
+    private fun Community.toEntity(): CommunityEntity = CommunityEntity(
+        id = id,
+        name = name,
+        description = description,
+        createdAt = createdAt
+    )
 }
 
 class RepositoryException(message: String) : RuntimeException(message)
