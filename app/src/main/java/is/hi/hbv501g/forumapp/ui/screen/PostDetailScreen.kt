@@ -3,6 +3,7 @@ package com.hbv501g.forumapp.ui.screen
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -11,6 +12,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -18,10 +21,12 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -29,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -40,6 +46,7 @@ import com.hbv501g.forumapp.data.repository.ForumRepository
 import com.hbv501g.forumapp.data.repository.RepositoryException
 import com.hbv501g.forumapp.ui.component.PostCard
 import com.hbv501g.forumapp.ui.component.simpleViewModelFactory
+import com.hbv501g.forumapp.ui.util.toRelativeTimeLabel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -49,8 +56,8 @@ data class PostDetailUiState(
     val post: Post? = null,
     val comments: List<Comment> = emptyList(),
     val commentInput: String = "",
-    val postScoreOverride: Int? = null,
-    val commentScoreOverrides: Map<String, Int> = emptyMap(),
+    val postScores: Map<String, Int> = emptyMap(),
+    val commentScores: Map<String, Int> = emptyMap(),
     val currentUsername: String = "",
     val ownedCommunities: Set<String> = emptySet(),
     val isLoading: Boolean = true,
@@ -64,6 +71,7 @@ class PostDetailViewModel(
     private val postId: String
 ) : ViewModel() {
 
+    private val voteManager = repository.voteManager
     private val _uiState = MutableStateFlow(PostDetailUiState())
     val uiState = _uiState.asStateFlow()
 
@@ -76,6 +84,16 @@ class PostDetailViewModel(
         viewModelScope.launch {
             repository.ownedCommunitiesFlow.collect { owned ->
                 _uiState.update { it.copy(ownedCommunities = owned) }
+            }
+        }
+        viewModelScope.launch {
+            voteManager.postScores.collect { scores ->
+                _uiState.update { it.copy(postScores = scores) }
+            }
+        }
+        viewModelScope.launch {
+            voteManager.commentScores.collect { scores ->
+                _uiState.update { it.copy(commentScores = scores) }
             }
         }
         refresh()
@@ -147,33 +165,39 @@ class PostDetailViewModel(
 
     fun votePost(direction: Int) {
         val post = _uiState.value.post ?: return
-        val currentScore = _uiState.value.postScoreOverride ?: post.score
-        val nextScore = currentScore + direction
-        _uiState.update { it.copy(postScoreOverride = nextScore) }
+        val currentScore = voteManager.postScore(post.id) ?: post.score
+
+        voteManager.optimisticPostVote(post.id, currentScore, direction)
+
         viewModelScope.launch {
             try {
                 repository.vote(post.id, "POST", direction)
+                val updatedPost = repository.getPost(post.id)
+                voteManager.confirmPostScore(post.id, updatedPost.score)
             } catch (exception: RepositoryException) {
-                _uiState.update { it.copy(postScoreOverride = currentScore, error = exception.message) }
+                voteManager.revertPostScore(post.id, currentScore)
+                _uiState.update { it.copy(error = exception.message) }
             }
         }
     }
 
     fun voteComment(commentId: String, direction: Int) {
         val comment = _uiState.value.comments.firstOrNull { it.id == commentId } ?: return
-        val currentScore = _uiState.value.commentScoreOverrides[commentId] ?: comment.score
-        val nextScore = currentScore + direction
-        _uiState.update { it.copy(commentScoreOverrides = it.commentScoreOverrides + (commentId to nextScore)) }
+        val currentScore = voteManager.commentScore(commentId) ?: comment.score
+
+        voteManager.optimisticCommentVote(commentId, currentScore, direction)
+
         viewModelScope.launch {
             try {
                 repository.vote(commentId, "COMMENT", direction)
-            } catch (exception: RepositoryException) {
-                _uiState.update {
-                    it.copy(
-                        commentScoreOverrides = it.commentScoreOverrides + (commentId to currentScore),
-                        commentError = exception.message
-                    )
+                val updatedComments = repository.getComments(postId)
+                val votedComment = updatedComments.firstOrNull { it.id == commentId }
+                if (votedComment != null) {
+                    voteManager.confirmCommentScore(commentId, votedComment.score)
                 }
+            } catch (exception: RepositoryException) {
+                voteManager.revertCommentScore(commentId, currentScore)
+                _uiState.update { it.copy(commentError = exception.message) }
             }
         }
     }
@@ -291,7 +315,7 @@ private fun PostDetailScreen(
                     item {
                         PostCard(
                             post = post,
-                            score = state.postScoreOverride ?: post.score,
+                            score = state.postScores[post.id] ?: post.score,
                             onUpvote = { onVotePost(1) },
                             onDownvote = { onVotePost(-1) }
                         )
@@ -364,7 +388,7 @@ private fun PostDetailScreen(
                         } == true
                 CommentCard(
                     comment = comment,
-                    score = state.commentScoreOverrides[comment.id] ?: comment.score,
+                    score = state.commentScores[comment.id] ?: comment.score,
                     onUpvote = { onVoteComment(comment.id, 1) },
                     onDownvote = { onVoteComment(comment.id, -1) },
                     onRemove = { onRemoveComment(comment.id) },
@@ -401,24 +425,47 @@ private fun CommentCard(
                 text = comment.body,
                 style = MaterialTheme.typography.bodyMedium
             )
-            androidx.compose.foundation.layout.Row {
-                Button(onClick = onUpvote) {
-                    Text("Upvote")
-                }
-                Button(onClick = onDownvote) {
-                    Text("Downvote")
-                }
-                if (canRemove) {
-                    Button(onClick = onRemove) {
-                        Text("Remove")
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onUpvote) {
+                        Icon(
+                            Icons.Default.ArrowUpward,
+                            contentDescription = "Upvote comment",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    IconButton(onClick = onDownvote) {
+                        Icon(
+                            Icons.Default.ArrowDownward,
+                            contentDescription = "Downvote comment",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (canRemove) {
+                        TextButton(onClick = onRemove) {
+                            Text("Remove")
+                        }
                     }
                 }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = score.toString(),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.End
+                    )
+                    Text(
+                        text = comment.createdAt.toRelativeTimeLabel(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
-            Text(
-                text = "Score $score • ${comment.createdAt}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.secondary
-            )
         }
     }
 }

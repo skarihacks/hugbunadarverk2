@@ -44,6 +44,7 @@ data class PostResponse(
     val author: JsonElement?,
     @SerializedName("authorUsername")
     val authorUsername: String?,
+    val authorName: String?,
     val authorId: String?,
     val title: String?,
     val type: String?,
@@ -86,6 +87,8 @@ data class CommentResponse(
     val author: JsonElement?,
     @SerializedName("authorUsername")
     val authorUsername: String?,
+    val authorName: String?,
+    val authorId: String?,
     val body: String?,
     val score: Int?,
     val createdAt: String?

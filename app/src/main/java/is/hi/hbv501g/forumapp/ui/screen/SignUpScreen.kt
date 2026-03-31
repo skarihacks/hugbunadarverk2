@@ -1,19 +1,28 @@
 package com.hbv501g.forumapp.ui.screen
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -22,6 +31,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hbv501g.forumapp.data.repository.ForumRepository
 import com.hbv501g.forumapp.data.repository.RepositoryException
+import com.hbv501g.forumapp.ui.component.ForumBrand
 import com.hbv501g.forumapp.ui.component.simpleViewModelFactory
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -146,77 +156,126 @@ private fun SignUpScreen(
     onSubmit: () -> Unit,
     onBackToLogin: () -> Unit
 ) {
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .background(MaterialTheme.colorScheme.background)
     ) {
-        Text(
-            text = "Create Account",
-            style = MaterialTheme.typography.headlineMedium
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(340.dp)
+                .clip(RoundedCornerShape(bottomStart = 36.dp, bottomEnd = 36.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
         )
 
-        OutlinedTextField(
-            value = state.username,
-            onValueChange = onUsernameChange,
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Username") },
-            singleLine = true,
-            enabled = !state.isSubmitting
-        )
-
-        OutlinedTextField(
-            value = state.email,
-            onValueChange = onEmailChange,
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Email") },
-            singleLine = true,
-            enabled = !state.isSubmitting
-        )
-
-        OutlinedTextField(
-            value = state.password,
-            onValueChange = onPasswordChange,
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Password") },
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-            enabled = !state.isSubmitting
-        )
-
-        OutlinedTextField(
-            value = state.confirmPassword,
-            onValueChange = onConfirmPasswordChange,
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Confirm password") },
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-            enabled = !state.isSubmitting
-        )
-
-        if (!state.error.isNullOrBlank()) {
-            Text(
-                text = state.error,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-
-        Button(
-            onClick = onSubmit,
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !state.isSubmitting
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .padding(horizontal = 24.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(26.dp)
         ) {
-            Text(if (state.isSubmitting) "Creating account..." else "Sign up")
-        }
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                ForumBrand()
+                Text(
+                    text = "Create a profile and start joining calmer conversations.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
-        TextButton(
-            onClick = onBackToLogin,
-            enabled = !state.isSubmitting
-        ) {
-            Text("Already have an account? Login")
+            Surface(
+                shape = RoundedCornerShape(30.dp),
+                color = MaterialTheme.colorScheme.surface,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                        shape = RoundedCornerShape(30.dp)
+                    )
+            ) {
+                Column(
+                    modifier = Modifier.padding(22.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Text(
+                        text = "Create account",
+                        style = MaterialTheme.typography.headlineSmall
+                    )
+
+                    OutlinedTextField(
+                        value = state.username,
+                        onValueChange = onUsernameChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Username") },
+                        singleLine = true,
+                        enabled = !state.isSubmitting
+                    )
+
+                    OutlinedTextField(
+                        value = state.email,
+                        onValueChange = onEmailChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Email") },
+                        singleLine = true,
+                        enabled = !state.isSubmitting
+                    )
+
+                    OutlinedTextField(
+                        value = state.password,
+                        onValueChange = onPasswordChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Password") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        enabled = !state.isSubmitting
+                    )
+
+                    OutlinedTextField(
+                        value = state.confirmPassword,
+                        onValueChange = onConfirmPasswordChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Confirm password") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        enabled = !state.isSubmitting
+                    )
+
+                    if (!state.error.isNullOrBlank()) {
+                        Text(
+                            text = state.error,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+
+                    Button(
+                        onClick = onSubmit,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !state.isSubmitting
+                    ) {
+                        if (state.isSubmitting) {
+                            CircularProgressIndicator(
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.padding(vertical = 2.dp)
+                            )
+                        } else {
+                            Text("Sign up")
+                        }
+                    }
+
+                    TextButton(
+                        onClick = onBackToLogin,
+                        enabled = !state.isSubmitting,
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    ) {
+                        Text("Already have an account? Log in")
+                    }
+                }
+            }
         }
     }
 }

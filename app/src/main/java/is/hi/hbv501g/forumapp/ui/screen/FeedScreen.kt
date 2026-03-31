@@ -1,32 +1,46 @@
 package com.hbv501g.forumapp.ui.screen
 
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AddCircle
-import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -38,6 +52,7 @@ import com.hbv501g.forumapp.data.model.FeedSort
 import com.hbv501g.forumapp.data.model.Post
 import com.hbv501g.forumapp.data.repository.ForumRepository
 import com.hbv501g.forumapp.data.repository.RepositoryException
+import com.hbv501g.forumapp.ui.component.ForumBrand
 import com.hbv501g.forumapp.ui.component.PostCard
 import com.hbv501g.forumapp.ui.component.simpleViewModelFactory
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -51,13 +66,14 @@ data class FeedUiState(
     val selectedSort: FeedSort = FeedSort.HOT,
     val posts: List<Post> = emptyList(),
     val joinedCommunities: Set<String> = emptySet(),
-    val voteOverrides: Map<String, Int> = emptyMap(),
+    val postScores: Map<String, Int> = emptyMap(),
     val isLoading: Boolean = true,
     val error: String? = null
 )
 
 class FeedViewModel(private val repository: ForumRepository) : ViewModel() {
 
+    private val voteManager = repository.voteManager
     private val _uiState = MutableStateFlow(FeedUiState())
     val uiState = _uiState.asStateFlow()
 
@@ -70,6 +86,11 @@ class FeedViewModel(private val repository: ForumRepository) : ViewModel() {
         viewModelScope.launch {
             repository.joinedCommunitiesFlow.collect { joined ->
                 _uiState.update { it.copy(joinedCommunities = joined) }
+            }
+        }
+        viewModelScope.launch {
+            voteManager.postScores.collect { scores ->
+                _uiState.update { it.copy(postScores = scores) }
             }
         }
         refresh()
@@ -92,20 +113,18 @@ class FeedViewModel(private val repository: ForumRepository) : ViewModel() {
 
     fun votePost(postId: String, direction: Int) {
         val currentPost = _uiState.value.posts.firstOrNull { it.id == postId } ?: return
-        val currentScore = _uiState.value.voteOverrides[postId] ?: currentPost.score
-        val nextScore = currentScore + direction
-        _uiState.update { it.copy(voteOverrides = it.voteOverrides + (postId to nextScore)) }
+        val currentScore = voteManager.postScore(postId) ?: currentPost.score
+
+        voteManager.optimisticPostVote(postId, currentScore, direction)
 
         viewModelScope.launch {
             try {
                 repository.vote(postId, "POST", direction)
+                val updatedPost = repository.getPost(postId)
+                voteManager.confirmPostScore(postId, updatedPost.score)
             } catch (exception: RepositoryException) {
-                _uiState.update { state ->
-                    state.copy(
-                        voteOverrides = state.voteOverrides + (postId to currentScore),
-                        error = exception.message
-                    )
-                }
+                voteManager.revertPostScore(postId, currentScore)
+                _uiState.update { it.copy(error = exception.message) }
             }
         }
     }
@@ -182,61 +201,50 @@ private fun FeedScreen(
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = if (state.username.isBlank()) "Feed" else "Feed • ${state.username}"
-                    )
-                },
-                actions = {
-                    IconButton(onClick = onRefresh) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                    }
-                    IconButton(onClick = onCreatePost) {
-                        Icon(Icons.Default.Add, contentDescription = "Create post")
-                    }
-                    IconButton(onClick = onCreateCommunity) {
-                        Icon(Icons.Default.AddCircle, contentDescription = "Create community")
-                    }
-                    IconButton(onClick = onOpenCommunities) {
-                        Icon(Icons.Default.People, contentDescription = "Communities")
-                    }
-                    IconButton(onClick = onOpenSearch) {
-                        Icon(Icons.Default.Search, contentDescription = "Search")
-                    }
-                    IconButton(onClick = onLogout) {
-                        Icon(Icons.Default.ExitToApp, contentDescription = "Logout")
-                    }
-                }
-            )
-        }
+        containerColor = MaterialTheme.colorScheme.background
     ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .background(MaterialTheme.colorScheme.background)
         ) {
+            FeedHeader(
+                username = state.username,
+                onRefresh = onRefresh,
+                onCreatePost = onCreatePost,
+                onCreateCommunity = onCreateCommunity,
+                onOpenCommunities = onOpenCommunities,
+                onOpenSearch = onOpenSearch,
+                onLogout = onLogout
+            )
+
             SortChips(
                 selected = state.selectedSort,
                 onSelect = onSelectSort,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
             )
 
             if (!state.error.isNullOrBlank()) {
-                Text(
-                    text = state.error,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                )
+                Surface(
+                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = state.error,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
+                    )
+                }
             }
 
             if (state.joinedCommunities.isNotEmpty()) {
                 Text(
                     text = "Showing joined communities only (${state.joinedCommunities.size})",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
                 )
             }
 
@@ -250,18 +258,111 @@ private fun FeedScreen(
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     items(items = visiblePosts, key = { it.id }) { post ->
                         PostCard(
                             post = post,
-                            score = state.voteOverrides[post.id] ?: post.score,
+                            score = state.postScores[post.id] ?: post.score,
                             onUpvote = { onVotePost(post.id, 1) },
                             onDownvote = { onVotePost(post.id, -1) },
                             onClick = { onOpenPost(post.id) }
                         )
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FeedHeader(
+    username: String,
+    onRefresh: () -> Unit,
+    onCreatePost: () -> Unit,
+    onCreateCommunity: () -> Unit,
+    onOpenCommunities: () -> Unit,
+    onOpenSearch: () -> Unit,
+    onLogout: () -> Unit
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ForumBrand(compact = true)
+                Box {
+                    IconButton(onClick = { menuExpanded = true }) {
+                        Icon(Icons.Default.Menu, contentDescription = "Open menu")
+                    }
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Create community") },
+                            leadingIcon = { Icon(Icons.Default.People, contentDescription = null) },
+                            onClick = {
+                                menuExpanded = false
+                                onCreateCommunity()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Browse communities") },
+                            leadingIcon = { Icon(Icons.Default.People, contentDescription = null) },
+                            onClick = {
+                                menuExpanded = false
+                                onOpenCommunities()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Search") },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                            onClick = {
+                                menuExpanded = false
+                                onOpenSearch()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Log out") },
+                            leadingIcon = {
+                                Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null)
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onLogout()
+                            }
+                        )
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                FilledTonalButton(onClick = onCreatePost) {
+                    Icon(Icons.Default.Add, contentDescription = null)
+                    Text(
+                        text = "New post",
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
+                OutlinedButton(onClick = onRefresh) {
+                    Icon(Icons.Default.Refresh, contentDescription = null)
+                    Text(
+                        text = "Refresh",
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
                 }
             }
         }
@@ -279,16 +380,28 @@ private fun SortChips(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
-            text = "Sort",
+            text = "Browse by",
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.secondary
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FeedSort.entries.forEach { sort ->
                 FilterChip(
                     selected = sort == selected,
                     onClick = { onSelect(sort) },
-                    label = { Text(sort.name) }
+                    label = { Text(sort.name) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    border = FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = sort == selected,
+                        borderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                        selectedBorderColor = MaterialTheme.colorScheme.primary
+                    )
                 )
             }
         }

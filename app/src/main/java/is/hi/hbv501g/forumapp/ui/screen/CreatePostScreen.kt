@@ -1,15 +1,22 @@
 package com.hbv501g.forumapp.ui.screen
 
+import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DropdownMenu
@@ -22,6 +29,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -33,13 +41,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hbv501g.forumapp.data.repository.ForumRepository
 import com.hbv501g.forumapp.data.repository.RepositoryException
+import com.hbv501g.forumapp.ui.component.ForumBrand
 import com.hbv501g.forumapp.ui.component.simpleViewModelFactory
+import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -279,19 +290,20 @@ private fun CreatePostScreen(
 ) {
     val context = LocalContext.current
     var communityMenuExpanded by remember { mutableStateOf(false) }
+    var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
     val mediaPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri == null) {
             return@rememberLauncherForActivityResult
         }
-        val resolver = context.contentResolver
-        val mime = resolver.getType(uri) ?: "image/*"
-        val bytes = resolver.openInputStream(uri)?.use { it.readBytes() } ?: return@rememberLauncherForActivityResult
-        val fileName = resolver.query(uri, null, null, null, null)?.use { cursor ->
-            val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-            if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
-        } ?: "image-${UUID.randomUUID()}.jpg"
-
-        onAttachMedia(fileName, mime, bytes)
+        attachMediaFromUri(context, uri, onAttachMedia)
+    }
+    val cameraCapture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        val uri = pendingCameraUri
+        pendingCameraUri = null
+        if (!success || uri == null) {
+            return@rememberLauncherForActivityResult
+        }
+        attachMediaFromUri(context, uri, onAttachMedia)
     }
 
     val titleText = when (state.type) {
@@ -301,31 +313,53 @@ private fun CreatePostScreen(
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(titleText) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        }
+        containerColor = MaterialTheme.colorScheme.background
     ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(16.dp),
+                .background(MaterialTheme.colorScheme.background)
+                .statusBarsPadding()
+                .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PostDraftType.entries.forEach { type ->
-                    FilterChip(
-                        selected = state.type == type,
-                        onClick = { onTypeChange(type) },
-                        label = { Text(type.name) }
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = RoundedCornerShape(30.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                    ) {
+                        ForumBrand(compact = true)
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    }
+                    Text(
+                        text = titleText,
+                        style = MaterialTheme.typography.headlineSmall
                     )
+                    Text(
+                        text = "Share something with the community in a clear, calm format.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PostDraftType.entries.forEach { type ->
+                            FilterChip(
+                                selected = state.type == type,
+                                onClick = { onTypeChange(type) },
+                                label = { Text(type.name) }
+                            )
+                        }
+                    }
                 }
             }
 
@@ -402,12 +436,36 @@ private fun CreatePostScreen(
             }
 
             if (state.type == PostDraftType.MEDIA) {
-                Button(
-                    onClick = { mediaPicker.launch("image/*") },
-                    enabled = !state.isSubmitting,
-                    modifier = Modifier.fillMaxWidth()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text(if (state.media == null) "Pick image" else "Change image")
+                    Button(
+                        onClick = {
+                            val uri = createCameraImageUri(context)
+                            pendingCameraUri = uri
+                            cameraCapture.launch(uri)
+                        },
+                        enabled = !state.isSubmitting,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.PhotoCamera, contentDescription = null)
+                        Text(
+                            text = if (state.media == null) "Take photo" else "Retake",
+                            modifier = Modifier.padding(start = 8.dp)
+                        )
+                    }
+                    Button(
+                        onClick = { mediaPicker.launch("image/*") },
+                        enabled = !state.isSubmitting,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.PhotoLibrary, contentDescription = null)
+                        Text(
+                            text = if (state.media == null) "Pick image" else "Change image",
+                            modifier = Modifier.padding(start = 8.dp)
+                        )
+                    }
                 }
 
                 if (state.media != null) {
@@ -458,4 +516,30 @@ private fun CreatePostScreen(
             }
         }
     }
+}
+
+private fun createCameraImageUri(context: Context): Uri {
+    val imagesDir = File(context.cacheDir, "captured-images").apply { mkdirs() }
+    val imageFile = File(imagesDir, "camera-${UUID.randomUUID()}.jpg")
+    return FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        imageFile
+    )
+}
+
+private fun attachMediaFromUri(
+    context: Context,
+    uri: Uri,
+    onAttachMedia: (fileName: String, mimeType: String, bytes: ByteArray) -> Unit
+) {
+    val resolver = context.contentResolver
+    val mime = resolver.getType(uri) ?: "image/jpeg"
+    val bytes = resolver.openInputStream(uri)?.use { it.readBytes() } ?: return
+    val fileName = resolver.query(uri, null, null, null, null)?.use { cursor ->
+        val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+        if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
+    } ?: "image-${UUID.randomUUID()}.jpg"
+
+    onAttachMedia(fileName, mime, bytes)
 }

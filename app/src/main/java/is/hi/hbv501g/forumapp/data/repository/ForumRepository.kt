@@ -62,6 +62,10 @@ class ForumRepository(
     private val postPageType = object : TypeToken<PageResponse<PostResponse>>() {}.type
     private val _joinedCommunities = MutableStateFlow<Set<String>>(emptySet())
     private val _ownedCommunities = MutableStateFlow<Set<String>>(emptySet())
+    private val _removedPostIds = MutableStateFlow<Set<String>>(emptySet())
+
+    /** Shared vote state – all screens observe the same overrides. */
+    val voteManager = VoteManager()
 
     init {
         runBlocking {
@@ -129,6 +133,8 @@ class ForumRepository(
         sessionStore.clearSession()
         _joinedCommunities.value = emptySet()
         _ownedCommunities.value = emptySet()
+        _removedPostIds.value = emptySet()
+        voteManager.clear()
         postDao.deleteAll()
         commentDao.deleteAll()
         communityDao.deleteAll()
@@ -136,8 +142,11 @@ class ForumRepository(
 
     suspend fun getFeed(sort: FeedSort, page: Int = 0, size: Int = 25): Page<Post> {
         return try {
+            val cachedById = postDao.getAll().associateBy { it.id }
             val raw = apiService.listFeed(sort = sort.name, page = page, size = size)
             val feedPage = raw.toPostPage()
+                .mergeCachedPosts(cachedById)
+                .filterRemovedPosts()
             postDao.insertAll(feedPage.items.map { it.toEntity() })
             feedPage
         } catch (throwable: Throwable) {
@@ -149,7 +158,7 @@ class ForumRepository(
                     size = cached.size,
                     totalElements = cached.size.toLong(),
                     totalPages = 1
-                )
+                ).filterRemovedPosts()
             } else {
                 throw RepositoryException(throwable.toUserMessage())
             }
@@ -158,6 +167,7 @@ class ForumRepository(
 
     suspend fun createTextPost(communityName: String, title: String, body: String): Post {
         val sessionId = requireSessionId()
+        val username = currentUsername()
         return try {
             apiService.createPost(
                 sessionId = sessionId,
@@ -167,7 +177,7 @@ class ForumRepository(
                     type = "TEXT",
                     body = body.trim()
                 )
-            ).toDomain(fallbackCommunity = communityName.trim())
+            ).toDomain(fallbackCommunity = communityName.trim(), fallbackAuthor = username)
         } catch (throwable: Throwable) {
             throw RepositoryException(throwable.toUserMessage())
         }
@@ -175,6 +185,7 @@ class ForumRepository(
 
     suspend fun createLinkPost(communityName: String, title: String, url: String, body: String?): Post {
         val sessionId = requireSessionId()
+        val username = currentUsername()
         return try {
             try {
                 apiService.createPost(
@@ -186,7 +197,7 @@ class ForumRepository(
                         body = body?.trim().takeUnless { it.isNullOrBlank() },
                         url = url.trim()
                     )
-                ).toDomain(fallbackCommunity = communityName.trim())
+                ).toDomain(fallbackCommunity = communityName.trim(), fallbackAuthor = username)
             } catch (http: HttpException) {
                 if (http.code() !in listOf(400, 404, 405, 422)) {
                     throw http
@@ -209,7 +220,7 @@ class ForumRepository(
                         type = "TEXT",
                         body = fallbackBody
                     )
-                ).toDomain(fallbackCommunity = communityName.trim())
+                ).toDomain(fallbackCommunity = communityName.trim(), fallbackAuthor = username)
             }
         } catch (throwable: Throwable) {
             throw RepositoryException(throwable.toUserMessage())
@@ -225,6 +236,7 @@ class ForumRepository(
         mediaMimeType: String
     ): Post {
         val sessionId = requireSessionId()
+        val username = currentUsername()
         return try {
             val payload = gson.toJson(
                 CreatePostRequest(
@@ -250,7 +262,7 @@ class ForumRepository(
                         sessionId = sessionId,
                         payload = payload,
                         media = mediaPart
-                    ).toDomain(fallbackCommunity = communityName.trim())
+                    ).toDomain(fallbackCommunity = communityName.trim(), fallbackAuthor = username)
                 } catch (http: HttpException) {
                     if (http.code() !in listOf(404, 405, 415)) {
                         throw http
@@ -266,7 +278,7 @@ class ForumRepository(
                             body = body?.trim().takeUnless { it.isNullOrBlank() },
                             mediaBase64 = mediaBase64
                         )
-                    ).toDomain(fallbackCommunity = communityName.trim())
+                    ).toDomain(fallbackCommunity = communityName.trim(), fallbackAuthor = username)
                 }
             } finally {
                 tempFile.delete()
@@ -299,11 +311,18 @@ class ForumRepository(
 
     suspend fun getPost(postId: String): Post {
         return try {
-            val post = apiService.getPost(postId).toDomain()
+            val cachedPost = postDao.getById(postId)?.toDomain()
+            val post = apiService.getPost(postId).toDomain(
+                fallbackCommunity = cachedPost?.community,
+                fallbackAuthor = cachedPost?.author
+            )
+            if (post.id in _removedPostIds.value) {
+                throw RepositoryException("Post not found")
+            }
             postDao.insert(post.toEntity())
             post
         } catch (throwable: Throwable) {
-            postDao.getById(postId)?.toDomain()
+            postDao.getById(postId)?.toDomain()?.takeUnless { it.id in _removedPostIds.value }
                 ?: throw RepositoryException(throwable.toUserMessage())
         }
     }
@@ -451,7 +470,9 @@ class ForumRepository(
 
     suspend fun search(query: String): SearchResults {
         return try {
-            apiService.search(query.trim()).toDomain()
+            val results = apiService.search(query.trim()).toDomain().filterRemovedPosts()
+            postDao.insertAll(results.posts.map { it.toEntity() })
+            results
         } catch (throwable: Throwable) {
             throw RepositoryException(throwable.toUserMessage())
         }
@@ -459,7 +480,9 @@ class ForumRepository(
 
     suspend fun getUserProfile(username: String): UserProfile {
         return try {
-            apiService.getUserProfile(username.trim()).toUserProfile()
+            val profile = apiService.getUserProfile(username.trim()).toUserProfile()
+            postDao.insertAll(profile.posts.items.filterNotRemoved().map { it.toEntity() })
+            profile
         } catch (throwable: Throwable) {
             throw RepositoryException(throwable.toUserMessage())
         }
@@ -470,6 +493,7 @@ class ForumRepository(
         try {
             apiService.removePost(sessionId = sessionId, postId = postId)
             postDao.deleteById(postId)
+            _removedPostIds.update { it + postId }
         } catch (throwable: Throwable) {
             throw RepositoryException(throwable.toUserMessage())
         }
@@ -491,6 +515,10 @@ class ForumRepository(
 
     private suspend fun requireUserId(): String {
         return sessionStore.sessionFlow.first()?.userId ?: throw RepositoryException("Session expired. Please log in again.")
+    }
+
+    private suspend fun currentUsername(): String? {
+        return sessionStore.sessionFlow.first()?.username
     }
 
     private fun isMessageUsable(message: String?): Boolean {
@@ -541,11 +569,14 @@ class ForumRepository(
         }
     }
 
-    private fun parsePostPageObject(obj: JsonObject): Page<Post> {
+    private fun parsePostPageObject(
+        obj: JsonObject,
+        fallbackAuthor: String? = null
+    ): Page<Post> {
         if (obj.has("items")) {
             val page: PageResponse<PostResponse> = gson.fromJson(obj, postPageType)
             return Page(
-                items = page.items.map { it.toDomain() },
+                items = page.items.map { it.toDomain(fallbackAuthor = fallbackAuthor) },
                 page = page.page,
                 size = page.size,
                 totalElements = page.totalElements,
@@ -556,7 +587,7 @@ class ForumRepository(
         if (obj.has("content")) {
             val posts: List<PostResponse> = gson.fromJson(obj.get("content"), postListType) ?: emptyList()
             return Page(
-                items = posts.map { it.toDomain() },
+                items = posts.map { it.toDomain(fallbackAuthor = fallbackAuthor) },
                 page = obj.intOrDefault("number", 0),
                 size = obj.intOrDefault("size", posts.size),
                 totalElements = obj.longOrDefault("totalElements", posts.size.toLong()),
@@ -567,7 +598,7 @@ class ForumRepository(
         if (obj.has("posts") && obj.get("posts").isJsonArray) {
             val posts: List<PostResponse> = gson.fromJson(obj.get("posts"), postListType) ?: emptyList()
             return Page(
-                items = posts.map { it.toDomain() },
+                items = posts.map { it.toDomain(fallbackAuthor = fallbackAuthor) },
                 page = 0,
                 size = posts.size,
                 totalElements = posts.size.toLong(),
@@ -587,10 +618,13 @@ class ForumRepository(
     }
 
     private fun PostResponse.toDomain(): Post {
-        return toDomain(fallbackCommunity = null)
+        return toDomain(fallbackCommunity = null, fallbackAuthor = null)
     }
 
-    private fun PostResponse.toDomain(fallbackCommunity: String?): Post {
+    private fun PostResponse.toDomain(
+        fallbackCommunity: String? = null,
+        fallbackAuthor: String? = null
+    ): Post {
         val postId = id?.takeIf { it.isNotBlank() } ?: throw RepositoryException("Post response missing id")
         val communityName = firstNonBlank(
             extractCommunityName(community),
@@ -601,7 +635,9 @@ class ForumRepository(
         val authorName = firstNonBlank(
             extractAuthorName(author),
             authorUsername,
-            authorId
+            this.authorName,
+            authorId,
+            fallbackAuthor
         ) ?: "unknown"
         val postTitle = title?.takeIf { it.isNotBlank() } ?: "(untitled)"
 
@@ -633,7 +669,9 @@ class ForumRepository(
             postId = commentPostId,
             author = firstNonBlank(
                 extractAuthorName(author),
-                authorUsername
+                authorUsername,
+                this.authorName,
+                authorId
             ) ?: "unknown",
             body = body?.takeIf { it.isNotBlank() } ?: "",
             score = score ?: 0,
@@ -668,25 +706,50 @@ class ForumRepository(
             return null
         }
 
-        val obj = element.asJsonObject
+        return extractStringValueFromObject(element.asJsonObject, preferredKeys, maxDepth = 3)
+    }
+
+    private fun extractStringValueFromObject(
+        obj: JsonObject,
+        preferredKeys: List<String>,
+        maxDepth: Int
+    ): String? {
         preferredKeys.forEach { key ->
             val value = obj.get(key)
-            if (value != null && value.isJsonPrimitive) {
-                val text = value.asString?.trim()
-                if (!text.isNullOrBlank()) {
-                    return text
+            when {
+                value == null || value.isJsonNull -> Unit
+                value.isJsonPrimitive -> {
+                    val text = value.asString?.trim()
+                    if (!text.isNullOrBlank()) {
+                        return text
+                    }
+                }
+                maxDepth > 0 && value.isJsonObject -> {
+                    extractStringValueFromObject(value.asJsonObject, preferredKeys, maxDepth - 1)?.let {
+                        return it
+                    }
                 }
             }
         }
 
-        return obj.entrySet()
-            .firstNotNullOfOrNull { (_, value) ->
-                if (value != null && value.isJsonPrimitive) {
-                    value.asString?.trim()?.takeIf { it.isNotBlank() }
-                } else {
-                    null
+        obj.entrySet().forEach { (_, value) ->
+            when {
+                value == null || value.isJsonNull -> Unit
+                value.isJsonPrimitive -> {
+                    val text = value.asString?.trim()
+                    if (!text.isNullOrBlank()) {
+                        return text
+                    }
+                }
+                maxDepth > 0 && value.isJsonObject -> {
+                    extractStringValueFromObject(value.asJsonObject, preferredKeys, maxDepth - 1)?.let {
+                        return it
+                    }
                 }
             }
+        }
+
+        return null
     }
 
     private fun CommunityResponse.toDomain(): Community {
@@ -718,6 +781,43 @@ class ForumRepository(
         )
     }
 
+    private fun SearchResults.filterRemovedPosts(): SearchResults {
+        return copy(posts = posts.filterNotRemoved())
+    }
+
+    private fun Page<Post>.mergeCachedPosts(cachedById: Map<String, PostEntity>): Page<Post> {
+        return copy(items = items.map { post ->
+            cachedById[post.id]?.toDomain()?.let { cached -> post.mergeWith(cached) } ?: post
+        })
+    }
+
+    private fun Page<Post>.filterRemovedPosts(): Page<Post> {
+        val filteredItems = items.filterNotRemoved()
+        return copy(items = filteredItems, size = filteredItems.size, totalElements = filteredItems.size.toLong())
+    }
+
+    private fun List<Post>.filterNotRemoved(): List<Post> {
+        val removedIds = _removedPostIds.value
+        return filterNot { it.id in removedIds }
+    }
+
+    private fun Post.mergeWith(cached: Post): Post {
+        return copy(
+            community = preferKnownValue(primary = community, fallback = cached.community),
+            author = preferKnownValue(primary = author, fallback = cached.author),
+            title = preferKnownValue(primary = title, fallback = cached.title),
+            body = body ?: cached.body,
+            url = url ?: cached.url,
+            mediaUrl = mediaUrl ?: cached.mediaUrl,
+            mediaBase64 = mediaBase64 ?: cached.mediaBase64,
+            createdAt = preferKnownValue(primary = createdAt, fallback = cached.createdAt)
+        )
+    }
+
+    private fun preferKnownValue(primary: String, fallback: String): String {
+        return if (primary.isBlank() || primary.equals("unknown", ignoreCase = true)) fallback else primary
+    }
+
     private fun JsonElement.toUserProfile(): UserProfile {
         if (!isJsonObject) {
             throw RepositoryException("Unexpected user profile response format")
@@ -727,6 +827,7 @@ class ForumRepository(
         val userObj = obj.getAsJsonObject("user")
             ?: obj
         val postsElement = obj.get("posts")
+        val profileUsername = userObj.stringOrEmpty("username").takeIf { it.isNotBlank() }
 
         val profilePosts = when {
             postsElement == null || postsElement.isJsonNull -> Page(
@@ -739,14 +840,14 @@ class ForumRepository(
             postsElement.isJsonArray -> {
                 val posts: List<PostResponse> = gson.fromJson(postsElement, postListType) ?: emptyList()
                 Page(
-                    items = posts.map { it.toDomain() },
+                    items = posts.map { it.toDomain(fallbackAuthor = profileUsername) },
                     page = 0,
                     size = posts.size,
                     totalElements = posts.size.toLong(),
                     totalPages = 1
                 )
             }
-            postsElement.isJsonObject -> parsePostPageObject(postsElement.asJsonObject)
+            postsElement.isJsonObject -> parsePostPageObject(postsElement.asJsonObject, fallbackAuthor = profileUsername)
             else -> throw RepositoryException("Unexpected posts format in user profile")
         }
 
