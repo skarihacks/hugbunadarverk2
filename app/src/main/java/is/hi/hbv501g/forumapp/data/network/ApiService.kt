@@ -56,6 +56,11 @@ interface ApiService {
         @Query("q") query: String? = null
     ): List<CommunityResponse>
 
+    @GET("api/communities/joined")
+    suspend fun listJoinedCommunities(
+        @Header("X-Session-Id") sessionId: String
+    ): List<CommunityResponse>
+
     @GET("api/communities/{name}")
     suspend fun getCommunity(
         @Path("name") name: String

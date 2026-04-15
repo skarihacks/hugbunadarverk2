@@ -118,7 +118,11 @@ class ForumRepository(
                     email = response.user.email
                 )
             )
-            _joinedCommunities.value = sessionStore.loadJoinedCommunities(userId)
+            try {
+                refreshJoinedCommunitiesFromServer(response.sessionId, userId)
+            } catch (_: Throwable) {
+                _joinedCommunities.value = sessionStore.loadJoinedCommunities(userId)
+            }
             _ownedCommunities.value = sessionStore.loadOwnedCommunities(userId)
         } catch (throwable: Throwable) {
             throw RepositoryException(throwable.toUserMessage())
@@ -381,6 +385,20 @@ class ForumRepository(
                     .sortedBy { it.lowercase() }
             }
         }
+    }
+
+    private suspend fun refreshJoinedCommunitiesFromServer(sessionId: String, userId: String) {
+        val joined = apiService.listJoinedCommunities(sessionId)
+        communityDao.insertAll(joined.map { it.toDomain().toEntity() })
+
+        val names = joined
+            .map { it.name.trim() }
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase() }
+            .toSet()
+
+        _joinedCommunities.value = names
+        sessionStore.saveJoinedCommunities(userId, names)
     }
 
     private fun setCommunityJoined(communityName: String, joined: Boolean) {
@@ -757,7 +775,7 @@ class ForumRepository(
             id = id,
             name = name,
             description = description,
-            createdAt = createdAt
+            createdAt = createdAt.orEmpty()
         )
     }
 

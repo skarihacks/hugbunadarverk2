@@ -74,7 +74,7 @@ data class CommunityResponse(
     val id: String,
     val name: String,
     val description: String?,
-    val createdAt: String
+    val createdAt: String? = null
 )
 
 data class MembershipRequest(
