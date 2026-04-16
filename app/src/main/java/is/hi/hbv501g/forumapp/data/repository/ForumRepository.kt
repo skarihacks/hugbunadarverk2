@@ -123,7 +123,11 @@ class ForumRepository(
             } catch (_: Throwable) {
                 _joinedCommunities.value = sessionStore.loadJoinedCommunities(userId)
             }
-            _ownedCommunities.value = sessionStore.loadOwnedCommunities(userId)
+            try {
+                refreshModeratedCommunitiesFromServer(response.sessionId, userId)
+            } catch (_: Throwable) {
+                _ownedCommunities.value = sessionStore.loadOwnedCommunities(userId)
+            }
         } catch (throwable: Throwable) {
             throw RepositoryException(throwable.toUserMessage())
         }
@@ -399,6 +403,19 @@ class ForumRepository(
 
         _joinedCommunities.value = names
         sessionStore.saveJoinedCommunities(userId, names)
+    }
+
+    private suspend fun refreshModeratedCommunitiesFromServer(sessionId: String, userId: String) {
+        val moderated = apiService.listModeratedCommunities(sessionId)
+
+        val names = moderated
+            .map { it.name.trim() }
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase() }
+            .toSet()
+
+        _ownedCommunities.value = names
+        sessionStore.saveOwnedCommunities(userId, names)
     }
 
     private fun setCommunityJoined(communityName: String, joined: Boolean) {

@@ -61,6 +61,11 @@ interface ApiService {
         @Header("X-Session-Id") sessionId: String
     ): List<CommunityResponse>
 
+    @GET("api/communities/moderated")
+    suspend fun listModeratedCommunities(
+        @Header("X-Session-Id") sessionId: String
+    ): List<CommunityResponse>
+
     @GET("api/communities/{name}")
     suspend fun getCommunity(
         @Path("name") name: String

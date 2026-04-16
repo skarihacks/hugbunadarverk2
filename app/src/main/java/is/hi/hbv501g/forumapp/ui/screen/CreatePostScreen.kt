@@ -1,9 +1,12 @@
 package com.hbv501g.forumapp.ui.screen
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
@@ -306,6 +309,16 @@ private fun CreatePostScreen(
         attachMediaFromUri(context, uri, onAttachMedia)
     }
 
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            val uri = createCameraImageUri(context)
+            pendingCameraUri = uri
+            cameraCapture.launch(uri)
+        }
+    }
+
     val titleText = when (state.type) {
         PostDraftType.TEXT -> "Create text post"
         PostDraftType.LINK -> "Create link post"
@@ -442,9 +455,15 @@ private fun CreatePostScreen(
                 ) {
                     Button(
                         onClick = {
-                            val uri = createCameraImageUri(context)
-                            pendingCameraUri = uri
-                            cameraCapture.launch(uri)
+                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+                                == PackageManager.PERMISSION_GRANTED
+                            ) {
+                                val uri = createCameraImageUri(context)
+                                pendingCameraUri = uri
+                                cameraCapture.launch(uri)
+                            } else {
+                                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                            }
                         },
                         enabled = !state.isSubmitting,
                         modifier = Modifier.weight(1f)
